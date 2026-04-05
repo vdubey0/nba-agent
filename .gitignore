@@ -1,0 +1,23 @@
+# Secrets and local env files
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Build artifacts
+build/
+dist/
+
+# Node
+node_modules/
+
+# macOS
+.DS_Store

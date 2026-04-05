@@ -1,0 +1,787 @@
+[
+  {
+    "name": "What were Steph Curry's last 5 regular season games in 2025-26?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "player",
+        "id": 201939
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "last_n_games": 5
+      },
+      "sort": {
+        "by": "game_date",
+        "direction": "desc"
+      },
+      "limit": 5
+    }
+  },
+  {
+    "name": "What were Steph Curry's regular season games against the Spurs in 2025-26?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "player",
+        "id": 201939
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "opponent_team_id": 1610612759
+      },
+      "sort": {
+        "by": "game_date",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "What were the last 10 regular season player rows for Warriors players in 2025-26?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "perspective": "self",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "last_n_games": 10
+      },
+      "sort": {
+        "by": "game_date",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "What were the Warriors' last 5 regular season team games in 2025-26?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "last_n_games": 5
+      },
+      "sort": {
+        "by": "game_date",
+        "direction": "desc"
+      },
+      "limit": 5
+    }
+  },
+  {
+    "name": "What were the Warriors' regular season team games between 2026-01-01 and 2026-02-15?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "date_from": "2026-01-01",
+        "date_to": "2026-02-15"
+      },
+      "sort": {
+        "by": "game_date",
+        "direction": "asc"
+      }
+    }
+  },
+  {
+    "name": "What were Steph Curry's average points, rebounds, assists, and turnovers in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "player",
+        "id": 201939
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "aggregations": {
+        "pts": "mean",
+        "reb": "mean",
+        "ast": "mean",
+        "tov": "mean",
+        "game_id": "count"
+      }
+    }
+  },
+  {
+    "name": "What were Steph Curry's averages against the Spurs in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "player",
+        "id": 201939
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "opponent_team_id": 1610612759
+      },
+      "aggregations": {
+        "pts": "mean",
+        "reb": "mean",
+        "ast": "mean",
+        "fgm": "sum",
+        "fga": "sum",
+        "game_id": "count"
+      }
+    }
+  },
+  {
+    "name": "How did Steph Curry perform against each opponent in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "player",
+        "id": 201939
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["opponent_team_id"],
+      "aggregations": {
+        "pts": "mean",
+        "reb": "mean",
+        "ast": "mean",
+        "tov": "mean",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "pts_mean",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "Which opponents did Steph Curry score the most total points against in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "player",
+        "id": 201939
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["opponent_team_id"],
+      "aggregations": {
+        "pts": "sum",
+        "reb": "sum",
+        "ast": "sum",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "pts_sum",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "Which opponent teams' players averaged the most points and turnovers against the Warriors in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "perspective": "opponent",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["team_id"],
+      "aggregations": {
+        "pts": "mean",
+        "tov": "mean",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "pts_mean",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "Which Warriors players averaged the most points, rebounds, and assists in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "perspective": "self",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["player_id"],
+      "aggregations": {
+        "pts": "mean",
+        "reb": "mean",
+        "ast": "mean",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "pts_mean",
+        "direction": "desc"
+      },
+      "limit": 15
+    }
+  },
+  {
+    "name": "Which opposing players averaged the most points, rebounds, assists, and turnovers against the Warriors in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "perspective": "opponent",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["player_id"],
+      "aggregations": {
+        "pts": "mean",
+        "reb": "mean",
+        "ast": "mean",
+        "tov": "mean",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "pts_mean",
+        "direction": "desc"
+      },
+      "limit": 15
+    }
+  },
+  {
+    "name": "What were the Warriors' average points for, points allowed, rebounds, assists, and turnovers in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "aggregations": {
+        "pf": "mean",
+        "pa": "mean",
+        "reb": "mean",
+        "ast": "mean",
+        "tov": "mean",
+        "game_id": "count"
+      }
+    }
+  },
+  {
+    "name": "What were the Warriors' averages over their last 10 regular season games in 2025-26?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "last_n_games": 10
+      },
+      "aggregations": {
+        "pf": "mean",
+        "pa": "mean",
+        "reb": "mean",
+        "ast": "mean",
+        "game_id": "count"
+      }
+    }
+  },
+  {
+    "name": "How many points, rebounds, assists, and turnovers did the Warriors allow on average in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "perspective": "opponent",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "aggregations": {
+        "pf": "mean",
+        "reb": "mean",
+        "ast": "mean",
+        "tov": "mean",
+        "game_id": "count"
+      }
+    }
+  },
+  {
+    "name": "How many turnovers and steals did the Warriors force on average in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "perspective": "opponent",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "aggregations": {
+        "tov": "mean",
+        "stl": "mean",
+        "game_id": "count"
+      }
+    }
+  },
+  {
+    "name": "Which teams scored the most points per game in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["team_id"],
+      "aggregations": {
+        "pf": "mean",
+        "reb": "mean",
+        "ast": "mean",
+        "tov": "mean",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "pf_mean",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "Which teams averaged the most rebounds, offensive rebounds, and defensive rebounds in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["team_id"],
+      "aggregations": {
+        "reb": "mean",
+        "oreb": "mean",
+        "dreb": "mean",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "reb_mean",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "Which teams forced the most turnovers in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "perspective": "opponent",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["team_id"],
+      "aggregations": {
+        "tov": "mean",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "tov_mean",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "Which teams allowed the fewest points per game in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "perspective": "opponent",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["team_id"],
+      "aggregations": {
+        "pf": "mean",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "pf_mean",
+        "direction": "asc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "Which teams allowed the fewest rebounds per game in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "perspective": "opponent",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["team_id"],
+      "aggregations": {
+        "reb": "mean",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "reb_mean",
+        "direction": "asc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "What were Steph Curry's true shooting, effective field goal percentage, field goal percentage, three-point percentage, and free throw percentage in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "player",
+        "id": 201939
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "aggregations": {
+        "pts": "sum",
+        "fgm": "sum",
+        "fga": "sum",
+        "fg3m": "sum",
+        "fg3a": "sum",
+        "ftm": "sum",
+        "fta": "sum",
+        "game_id": "count"
+      },
+      "derived_metrics": ["ts_pct", "efg_pct", "fg_pct", "fg3_pct", "ft_pct"]
+    }
+  },
+  {
+    "name": "Against which opponents did Steph Curry have the highest true shooting percentage in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "player",
+        "id": 201939
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["opponent_team_id"],
+      "aggregations": {
+        "pts": "sum",
+        "fgm": "sum",
+        "fga": "sum",
+        "fg3m": "sum",
+        "fg3a": "sum",
+        "ftm": "sum",
+        "fta": "sum",
+        "game_id": "count"
+      },
+      "derived_metrics": ["ts_pct", "efg_pct", "fg_pct", "fg3_pct", "ft_pct"],
+      "sort": {
+        "by": "ts_pct",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "Which opponent teams' players had the highest true shooting percentage against the Warriors in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "perspective": "opponent",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["team_id"],
+      "aggregations": {
+        "pts": "sum",
+        "fgm": "sum",
+        "fga": "sum",
+        "fg3m": "sum",
+        "fg3a": "sum",
+        "ftm": "sum",
+        "fta": "sum",
+        "game_id": "count"
+      },
+      "derived_metrics": ["ts_pct", "efg_pct", "fg_pct", "fg3_pct", "ft_pct"],
+      "sort": {
+        "by": "ts_pct",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "What were the Warriors' offensive shooting percentages in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "aggregations": {
+        "pf": "sum",
+        "fgm": "sum",
+        "fga": "sum",
+        "fg3m": "sum",
+        "fg3a": "sum",
+        "ftm": "sum",
+        "fta": "sum",
+        "game_id": "count"
+      },
+      "derived_metrics": ["efg_pct", "fg_pct", "fg3_pct", "ft_pct"]
+    }
+  },
+  {
+    "name": "Which teams had the best offensive shooting percentages in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["team_id"],
+      "aggregations": {
+        "pf": "sum",
+        "fgm": "sum",
+        "fga": "sum",
+        "fg3m": "sum",
+        "fg3a": "sum",
+        "ftm": "sum",
+        "fta": "sum",
+        "game_id": "count"
+      },
+      "derived_metrics": ["efg_pct", "fg_pct", "fg3_pct", "ft_pct"],
+      "sort": {
+        "by": "efg_pct",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "Which teams allowed the lowest effective field goal percentage in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "perspective": "opponent",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["team_id"],
+      "aggregations": {
+        "pf": "sum",
+        "fgm": "sum",
+        "fga": "sum",
+        "fg3m": "sum",
+        "fg3a": "sum",
+        "ftm": "sum",
+        "fta": "sum",
+        "game_id": "count"
+      },
+      "derived_metrics": ["efg_pct", "fg_pct", "fg3_pct", "ft_pct"],
+      "sort": {
+        "by": "efg_pct",
+        "direction": "asc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "What shooting percentages did the Warriors allow in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "perspective": "opponent",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "aggregations": {
+        "pf": "sum",
+        "fgm": "sum",
+        "fga": "sum",
+        "fg3m": "sum",
+        "fg3a": "sum",
+        "ftm": "sum",
+        "fta": "sum",
+        "game_id": "count"
+      },
+      "derived_metrics": ["efg_pct", "fg_pct", "fg3_pct", "ft_pct"]
+    }
+  },
+  {
+    "name": "What were Steph Curry's shooting percentages over his last 10 regular season games in 2025-26?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "player",
+        "id": 201939
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "last_n_games": 10
+      },
+      "aggregations": {
+        "pts": "sum",
+        "fgm": "sum",
+        "fga": "sum",
+        "fg3m": "sum",
+        "fg3a": "sum",
+        "ftm": "sum",
+        "fta": "sum",
+        "game_id": "count"
+      },
+      "derived_metrics": ["ts_pct", "efg_pct", "fg_pct", "fg3_pct", "ft_pct"]
+    }
+  },
+  {
+    "name": "How many turnovers did the Warriors force over their last 10 regular season games in 2025-26?",
+    "query_spec": {
+      "scope": "team_game_stats",
+      "subject": {
+        "type": "team",
+        "id": 1610612744
+      },
+      "perspective": "opponent",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "last_n_games": 10
+      },
+      "aggregations": {
+        "tov": "mean",
+        "game_id": "count"
+      }
+    }
+  },
+  {
+    "name": "Which players had the highest scoring averages in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["player_id"],
+      "aggregations": {
+        "pts": "mean",
+        "reb": "mean",
+        "ast": "mean",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "pts_mean",
+        "direction": "desc"
+      },
+      "limit": 20
+    }
+  },
+  {
+    "name": "Which opposing teams' players averaged the most points and turnovers against the Warriors in the 2025-26 regular season using a league subject with an opponent_team_id filter?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "perspective": "opponent",
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "opponent_team_id": 1610612744
+      },
+      "group_by": ["team_id"],
+      "aggregations": {
+        "pts": "mean",
+        "tov": "mean",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "pts_mean",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  }
+]
