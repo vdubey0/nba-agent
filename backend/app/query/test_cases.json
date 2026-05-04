@@ -759,6 +759,29 @@
     }
   },
   {
+    "name": "Which players had the highest standard deviation in points in the 2025-26 regular season?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"]
+      },
+      "group_by": ["player_id"],
+      "aggregations": {
+        "pts": "stddev",
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "pts_stddev",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
     "name": "Which opposing teams' players averaged the most points and turnovers against the Warriors in the 2025-26 regular season using a league subject with an opponent_team_id filter?",
     "query_spec": {
       "scope": "player_game_stats",

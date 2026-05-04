@@ -326,7 +326,7 @@ Optional.
 
 Shape:
 {
-  "<raw_field>": "mean" | "sum" | "count" | "min" | "max"
+  "<raw_field>": "mean" | "sum" | "count" | "min" | "max" | "stddev"
 }
 
 Common fields:
@@ -337,6 +337,7 @@ Important:
 - use "pts" for player points
 - use "pf" for team points-for
 - do not use "pts" in team_game_stats queries
+- use "stddev" when the user asks for standard deviation, variability, volatility, or consistency of a stat across games
 
 **CRITICAL RULE FOR RECENT GAMES:**
 When the question asks about "last N games" or "recent games" for a specific player or team:
@@ -362,6 +363,19 @@ INCORRECT (do not do this):
   "subject": {"type": "player", "id": 2544},
   "filters": {"last_n_games": 5},
   "aggregations": {"pts": "mean", ...}  ← WRONG for recent games queries
+}
+
+Example:
+Question: "Which players this season had the highest standard deviation in points?"
+CORRECT query_spec:
+{
+  "scope": "player_game_stats",
+  "subject": {"type": "league"},
+  "filters": {"season": "2025-26", "season_type": ["Regular Season"]},
+  "group_by": ["player_id"],
+  "aggregations": {"pts": "stddev", "game_id": "count"},
+  "sort": {"by": "pts_stddev", "direction": "desc"},
+  "limit": 10
 }
 
 --------------------------------------------------

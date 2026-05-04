@@ -69,6 +69,7 @@ If you include a table:
 
 - Use readable column names:
   - pts_mean → Points
+  - pts_stddev → Points Std. Dev.
   - reb_mean → Rebounds
   - ast_mean → Assists
   - tov_mean → Turnovers

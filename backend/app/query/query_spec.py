@@ -311,7 +311,7 @@ def validate_query_spec(query_spec: dict) -> dict:
                     "message": "group_by field 'player_id' is not valid for team_game_stats scope."
                 }
 
-    allowed_agg_values = ['mean', 'sum', 'count', 'min', 'max']
+    allowed_agg_values = ['mean', 'sum', 'count', 'min', 'max', 'stddev']
 
     if 'aggregations' in query_spec:
         if type(query_spec['aggregations']) is not dict:
@@ -791,6 +791,9 @@ def run_query_spec(session, query_spec: dict) -> dict:
         elif agg_type == 'max':
             label = f'{agg_col}_max'
             expr = func.max(col).label(label)
+        elif agg_type == 'stddev':
+            label = f'{agg_col}_stddev'
+            expr = func.stddev_pop(cast(col, Float)).label(label)
         else:
             continue
 
