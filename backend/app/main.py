@@ -8,10 +8,10 @@ from openai import OpenAI
 from pydantic import BaseModel
 from sqlalchemy import text
 
-import app.models
 from app.chat_flow import answer_question, process_message
 from app.config import APP_ENV, APP_VERSION, AUTO_CREATE_TABLES, CORS_ORIGINS, OPENAI_API_KEY
-from app.db import Base, SessionLocal, engine
+from app.db import SessionLocal, engine
+from app.schema import ensure_tables_if_enabled
 
 
 logging.basicConfig(
@@ -24,8 +24,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     if AUTO_CREATE_TABLES:
-        logger.info("AUTO_CREATE_TABLES enabled, ensuring database tables exist")
-        Base.metadata.create_all(bind=engine)
+        ensure_tables_if_enabled()
     else:
         logger.info("AUTO_CREATE_TABLES disabled, skipping automatic schema creation")
     yield

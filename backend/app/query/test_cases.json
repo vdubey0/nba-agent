@@ -759,7 +759,7 @@
     }
   },
   {
-    "name": "Which players had the highest standard deviation in points in the 2025-26 regular season?",
+    "name": "Which players had the lowest standard deviation in points in the 2025-26 regular season with a minimum of 40 games played?",
     "query_spec": {
       "scope": "player_game_stats",
       "subject": {
@@ -767,7 +767,8 @@
       },
       "filters": {
         "season": "2025-26",
-        "season_type": ["Regular Season"]
+        "season_type": ["Regular Season"],
+        "min_games_played": 40
       },
       "group_by": ["player_id"],
       "aggregations": {
@@ -776,7 +777,55 @@
       },
       "sort": {
         "by": "pts_stddev",
-        "direction": "desc"
+        "direction": "asc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "Among players who average at least 15 points per game, which players this regular season had the lowest standard deviation in points?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "min_pts_mean": 15
+      },
+      "group_by": ["player_id"],
+      "aggregations": {
+        "pts": ["mean", "stddev"],
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "pts_stddev",
+        "direction": "asc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "Among players whose season high was at least 40 points, which players this regular season had the lowest standard deviation in points?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "min_pts_max": 40
+      },
+      "group_by": ["player_id"],
+      "aggregations": {
+        "pts": ["max", "stddev"],
+        "game_id": "count"
+      },
+      "sort": {
+        "by": "pts_stddev",
+        "direction": "asc"
       },
       "limit": 10
     }
@@ -802,6 +851,33 @@
       },
       "sort": {
         "by": "pts_mean",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  },
+  {
+    "name": "Among players who averaged more than 2 steals + blocks this season, which players had the highest 3 point percentage?",
+    "query_spec": {
+      "scope": "player_game_stats",
+      "subject": {
+        "type": "league"
+      },
+      "filters": {
+        "season": "2025-26",
+        "season_type": ["Regular Season"],
+        "gt_stl_blk_mean": 2
+      },
+      "group_by": ["player_id"],
+      "aggregations": {
+        "stl_blk": "mean",
+        "fg3m": "sum",
+        "fg3a": "sum",
+        "game_id": "count"
+      },
+      "derived_metrics": ["fg3_pct"],
+      "sort": {
+        "by": "fg3_pct",
         "direction": "desc"
       },
       "limit": 10

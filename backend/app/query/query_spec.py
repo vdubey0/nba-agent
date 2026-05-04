@@ -6,6 +6,120 @@ import pprint
 import json
 
 
+AGG_TYPES = ['mean', 'sum', 'count', 'min', 'max', 'stddev']
+STAT_THRESHOLD_FIELDS = [
+    'pts', 'reb', 'ast', 'stl', 'blk', 'tov', 'fgm', 'fga', 'fg3m', 'fg3a',
+    'ftm', 'fta', 'minutes'
+]
+AGGREGATABLE_FIELDS = [
+    'pts', 'pf', 'pa', 'reb', 'ast', 'stl', 'blk', 'tov', 'fgm', 'fga',
+    'fg3m', 'fg3a', 'ftm', 'fta', 'oreb', 'dreb', 'minutes', 'fouls',
+    'plus_minus', 'game_id'
+]
+COMPOSITE_AGGREGATABLE_FIELDS = {
+    'stl_blk': ('stl', 'blk'),
+}
+ALL_AGGREGATABLE_FIELDS = AGGREGATABLE_FIELDS + list(COMPOSITE_AGGREGATABLE_FIELDS.keys())
+AGG_THRESHOLD_FILTERS = [
+    f'{prefix}_{field}_{agg_type}'
+    for field in ALL_AGGREGATABLE_FIELDS
+    for agg_type in AGG_TYPES
+    for prefix in ('min', 'max', 'gt', 'lt')
+]
+
+
+def parse_agg_threshold_filter(filter_key: str) -> tuple[str, str, str] | None:
+    if not filter_key.startswith(('min_', 'max_', 'gt_', 'lt_')):
+        return None
+
+    operator, remainder = filter_key.split('_', 1)
+    if '_' not in remainder:
+        return None
+
+    agg_field, agg_type = remainder.rsplit('_', 1)
+    if agg_field not in ALL_AGGREGATABLE_FIELDS or agg_type not in AGG_TYPES:
+        return None
+
+    return operator, agg_field, agg_type
+
+
+def normalize_aggregations(
+    aggregations: dict,
+    sort_spec: dict | None = None,
+    filters: dict | None = None
+) -> dict[str, list[str]]:
+    normalized = {}
+
+    for agg_field, agg_value in aggregations.items():
+        agg_values = agg_value if isinstance(agg_value, list) else [agg_value]
+        normalized[agg_field] = []
+
+        for agg_type in agg_values:
+            if agg_type not in normalized[agg_field]:
+                normalized[agg_field].append(agg_type)
+
+    if sort_spec:
+        sort_field = sort_spec.get('by')
+        if isinstance(sort_field, str):
+            for agg_type in AGG_TYPES:
+                suffix = f'_{agg_type}'
+                if sort_field.endswith(suffix):
+                    agg_field = sort_field[:-len(suffix)]
+                    normalized.setdefault(agg_field, [])
+                    if agg_type not in normalized[agg_field]:
+                        normalized[agg_field].append(agg_type)
+                    break
+
+    if filters:
+        for filter_key in filters:
+            parsed = parse_agg_threshold_filter(filter_key)
+            if parsed is None:
+                continue
+
+            _, agg_field, agg_type = parsed
+            normalized.setdefault(agg_field, [])
+            if agg_type not in normalized[agg_field]:
+                normalized[agg_field].append(agg_type)
+
+    return normalized
+
+
+def aggregate_expr(col, agg_type: str):
+    if agg_type == 'mean':
+        return func.avg(col)
+    if agg_type == 'sum':
+        return func.sum(col)
+    if agg_type == 'count':
+        return func.count(col)
+    if agg_type == 'min':
+        return func.min(col)
+    if agg_type == 'max':
+        return func.max(col)
+    if agg_type == 'stddev':
+        return func.stddev_pop(cast(col, Float))
+    return None
+
+
+def aggregate_metric_expr(stat_cols, agg_field: str, agg_type: str):
+    if agg_field in COMPOSITE_AGGREGATABLE_FIELDS:
+        component_cols = []
+        for component in COMPOSITE_AGGREGATABLE_FIELDS[agg_field]:
+            col = getattr(stat_cols, component, None)
+            if col is None:
+                return None
+            component_cols.append(col)
+
+        col_expr = component_cols[0]
+        for col in component_cols[1:]:
+            col_expr = col_expr + col
+    else:
+        col_expr = getattr(stat_cols, agg_field, None)
+        if col_expr is None:
+            return None
+
+    return aggregate_expr(col_expr, agg_type)
+
+
 def validate_query_spec(query_spec: dict) -> dict:
     if type(query_spec) is not dict:
         return {
@@ -118,6 +232,8 @@ def validate_query_spec(query_spec: dict) -> dict:
         'min_ftm', 'max_ftm',
         'min_fta', 'max_fta',
         'min_minutes', 'max_minutes',
+        *AGG_THRESHOLD_FILTERS,
+        'min_games_played',
         # V3: Category 4 - Player presence/absence
         'present_player_ids',
         'absent_player_ids'
@@ -252,6 +368,25 @@ def validate_query_spec(query_spec: dict) -> dict:
                         "message": f"Filter '{filter_key}' must be of type int or float."
                     }
 
+            elif filter_key in AGG_THRESHOLD_FILTERS:
+                if type(filter_val) not in [int, float]:
+                    return {
+                        "status": "failed",
+                        "message": f"Filter '{filter_key}' must be of type int or float."
+                    }
+
+            elif filter_key == 'min_games_played':
+                if type(filter_val) is not int:
+                    return {
+                        "status": "failed",
+                        "message": "Filter 'min_games_played' must be of type int."
+                    }
+                if filter_val <= 0:
+                    return {
+                        "status": "failed",
+                        "message": "Filter 'min_games_played' must be greater than 0."
+                    }
+
             # V3: Category 4 - Player presence/absence filters
             elif filter_key == 'present_player_ids':
                 if type(filter_val) is not list:
@@ -311,7 +446,17 @@ def validate_query_spec(query_spec: dict) -> dict:
                     "message": "group_by field 'player_id' is not valid for team_game_stats scope."
                 }
 
-    allowed_agg_values = ['mean', 'sum', 'count', 'min', 'max', 'stddev']
+    if query_spec.get('filters', {}).get('min_games_played') is not None and not query_spec.get('group_by'):
+        return {
+            "status": "failed",
+            "message": "Filter 'min_games_played' requires group_by."
+        }
+
+    if any(filter_key in AGG_THRESHOLD_FILTERS for filter_key in query_spec.get('filters', {})) and not query_spec.get('group_by'):
+        return {
+            "status": "failed",
+            "message": "Aggregate threshold filters require group_by."
+        }
 
     if 'aggregations' in query_spec:
         if type(query_spec['aggregations']) is not dict:
@@ -326,16 +471,33 @@ def validate_query_spec(query_spec: dict) -> dict:
                     "status": "failed",
                     "message": "Each aggregation field name must be of type str."
                 }
-            if type(agg_type) is not str:
+            if agg_field not in ALL_AGGREGATABLE_FIELDS:
                 return {
                     "status": "failed",
-                    "message": f"Aggregation type for field '{agg_field}' must be of type str."
+                    "message": f"Invalid aggregation field '{agg_field}'. Allowed values are: {ALL_AGGREGATABLE_FIELDS}."
                 }
-            if agg_type not in allowed_agg_values:
+            if type(agg_type) not in [str, list]:
                 return {
                     "status": "failed",
-                    "message": f"Invalid aggregation '{agg_type}' for field '{agg_field}'. Allowed values are: {allowed_agg_values}."
+                    "message": f"Aggregation type for field '{agg_field}' must be of type str or list."
                 }
+            agg_values = agg_type if isinstance(agg_type, list) else [agg_type]
+            if len(agg_values) == 0:
+                return {
+                    "status": "failed",
+                    "message": f"Aggregation list for field '{agg_field}' cannot be empty."
+                }
+            for agg_value in agg_values:
+                if type(agg_value) is not str:
+                    return {
+                        "status": "failed",
+                        "message": f"Each aggregation value for field '{agg_field}' must be of type str."
+                    }
+                if agg_value not in AGG_TYPES:
+                    return {
+                        "status": "failed",
+                        "message": f"Invalid aggregation '{agg_value}' for field '{agg_field}'. Allowed values are: {AGG_TYPES}."
+                    }
 
     allowed_derived_metrics = [
         # Basic shooting percentages (player & team)
@@ -445,7 +607,11 @@ def run_query_spec(session, query_spec: dict) -> dict:
 
     subject = query_spec.get('subject')
     group_by = query_spec.get('group_by', [])
-    aggregations = query_spec.get('aggregations', {})
+    aggregations = normalize_aggregations(
+        query_spec.get('aggregations', {}),
+        query_spec.get('sort'),
+        filters
+    )
     derived_metrics = query_spec.get('derived_metrics', [])
 
     has_group_by = len(group_by) > 0
@@ -462,6 +628,9 @@ def run_query_spec(session, query_spec: dict) -> dict:
         )
         .join(Game, base_scope.game_id == Game.game_id)
     )
+
+    if scope_name == 'player_game_stats':
+        base_query = base_query.filter(base_scope.minutes > 0)
 
     if subject:
         if scope_name == 'player_game_stats':
@@ -543,6 +712,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
                 games_with_player = (
                     session.query(PlayerGameStats.game_id)
                     .filter(PlayerGameStats.player_id == player_id)
+                    .filter(PlayerGameStats.minutes > 0)
                     .distinct()
                     .subquery()
                 )
@@ -559,6 +729,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
             games_with_absent_players = (
                 session.query(PlayerGameStats.game_id)
                 .filter(PlayerGameStats.player_id.in_(absent_ids))
+                .filter(PlayerGameStats.minutes > 0)
                 .distinct()
                 .subquery()
             )
@@ -604,6 +775,9 @@ def run_query_spec(session, query_spec: dict) -> dict:
         using_subquery = False
 
         query = session.query(base_scope).join(Game, base_scope.game_id == Game.game_id)
+
+        if scope_name == 'player_game_stats':
+            query = query.filter(base_scope.minutes > 0)
 
         if subject:
             if scope_name == 'player_game_stats':
@@ -668,6 +842,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
                     games_with_player = (
                         session.query(PlayerGameStats.game_id)
                         .filter(PlayerGameStats.player_id == player_id)
+                        .filter(PlayerGameStats.minutes > 0)
                         .distinct()
                         .subquery()
                     )
@@ -684,6 +859,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
                 games_with_absent_players = (
                     session.query(PlayerGameStats.game_id)
                     .filter(PlayerGameStats.player_id.in_(absent_ids))
+                    .filter(PlayerGameStats.minutes > 0)
                     .distinct()
                     .subquery()
                 )
@@ -773,32 +949,16 @@ def run_query_spec(session, query_spec: dict) -> dict:
     agg_cols = []
     agg_label_map = {}
 
-    for agg_col, agg_type in aggregations.items():
-        col = getattr(stat_cols, agg_col)
+    for agg_col, agg_types in aggregations.items():
+        for agg_type in agg_types:
+            expr = aggregate_metric_expr(stat_cols, agg_col, agg_type)
+            if expr is None:
+                continue
 
-        if agg_type == 'mean':
-            label = f'{agg_col}_mean'
-            expr = func.avg(col).label(label)
-        elif agg_type == 'sum':
-            label = f'{agg_col}_sum'
-            expr = func.sum(col).label(label)
-        elif agg_type == 'count':
-            label = f'{agg_col}_count'
-            expr = func.count(col).label(label)
-        elif agg_type == 'min':
-            label = f'{agg_col}_min'
-            expr = func.min(col).label(label)
-        elif agg_type == 'max':
-            label = f'{agg_col}_max'
-            expr = func.max(col).label(label)
-        elif agg_type == 'stddev':
-            label = f'{agg_col}_stddev'
-            expr = func.stddev_pop(cast(col, Float)).label(label)
-        else:
-            continue
-
-        agg_cols.append(expr)
-        agg_label_map[label] = expr
+            label = f'{agg_col}_{agg_type}'
+            expr = expr.label(label)
+            agg_cols.append(expr)
+            agg_label_map[label] = expr
 
 
     # ----------------------------------------------------
@@ -1519,6 +1679,31 @@ def run_query_spec(session, query_spec: dict) -> dict:
             *derived_metric_exprs
         ).group_by(*group_by_exprs)
 
+        if 'min_games_played' in filters:
+            query = query.having(func.count(subject_cols.game_id) >= filters['min_games_played'])
+
+        for filter_key in AGG_THRESHOLD_FILTERS:
+            if filter_key not in filters:
+                continue
+
+            parsed = parse_agg_threshold_filter(filter_key)
+            if parsed is None:
+                continue
+
+            operator, stat_col, agg_type = parsed
+            agg_expr = aggregate_metric_expr(stat_cols, stat_col, agg_type)
+            if agg_expr is None:
+                continue
+
+            if operator == 'min':
+                query = query.having(agg_expr >= filters[filter_key])
+            elif operator == 'max':
+                query = query.having(agg_expr <= filters[filter_key])
+            elif operator == 'gt':
+                query = query.having(agg_expr > filters[filter_key])
+            else:
+                query = query.having(agg_expr < filters[filter_key])
+
     elif has_aggs:
         # Only use aggregated derived metrics when there are actual aggregations
         query = query.with_entities(*agg_cols, *derived_metric_exprs)
@@ -1650,9 +1835,9 @@ def run_query_spec(session, query_spec: dict) -> dict:
             }
 
         if sort_dir == 'desc':
-            query = query.order_by(sort_col.desc())
+            query = query.order_by(sort_col.desc().nullslast())
         else:
-            query = query.order_by(sort_col.asc())
+            query = query.order_by(sort_col.asc().nullslast())
 
     # -------------------------
     # STEP 10: limit

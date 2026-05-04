@@ -13,6 +13,7 @@ from ingest.writers import (
     insert_player_game_stats,
     insert_team_game_stats,
 )
+from app.schema import ensure_tables_if_enabled
 from app.db import SessionLocal
 from datetime import datetime, timedelta
 import time
@@ -279,12 +280,14 @@ def backfill_range(start_date: str, end_date: str) -> dict:
 
 
 if __name__ == "__main__":
+    ensure_tables_if_enabled()
+
     # Run initial backfill
     print("=" * 80)
     print("STARTING INITIAL BACKFILL")
     print("=" * 80)
     
-    result = backfill_range(start_date="2026-03-24", end_date="2026-03-28")
+    result = backfill_range(start_date="2026-03-28", end_date="2026-05-04")
     
     # Collect dates that failed or partially succeeded
     failed_or_partial_dates = []

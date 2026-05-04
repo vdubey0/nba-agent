@@ -1,7 +1,10 @@
 import logging
+import os
 import sys
 from datetime import datetime, timedelta
 
+from app.db import engine
+from app.schema import ensure_tables_if_enabled
 from ingest.backfill import ingest_date
 
 
@@ -12,9 +15,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _parse_positive_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default %s", name, raw_value, default)
+        return default
+
+    if value < 1:
+        logger.warning("Invalid %s=%r; using default %s", name, raw_value, default)
+        return default
+
+    return value
+
+
 def run_daily_update() -> int:
     today = datetime.utcnow().date()
-    target_dates = [today - timedelta(days=1)]
+    lag_days = _parse_positive_int("DAILY_UPDATE_LAG_DAYS", 1)
+    lookback_days = _parse_positive_int("DAILY_UPDATE_LOOKBACK_DAYS", 2)
+    target_dates = [
+        today - timedelta(days=days_ago)
+        for days_ago in range(lag_days, lag_days + lookback_days)
+    ]
 
     total_games_found = 0
     total_games_succeeded = 0
@@ -67,12 +93,15 @@ def main() -> int:
     logger.info("Daily update job started at %s", datetime.utcnow().isoformat())
 
     try:
+        ensure_tables_if_enabled()
         exit_code = run_daily_update()
         logger.info("Daily update job finished with exit code %s", exit_code)
         return exit_code
     except Exception:
         logger.exception("Daily update job failed")
         return 1
+    finally:
+        engine.dispose()
 
 
 if __name__ == "__main__":

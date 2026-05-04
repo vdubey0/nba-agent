@@ -235,6 +235,8 @@ Allowed keys:
 - min_point_differential
 - max_point_differential
 - min_pts, max_pts, min_reb, max_reb, min_ast, max_ast, min_stl, max_stl, min_blk, max_blk, min_tov, max_tov, min_fgm, max_fgm, min_fga, max_fga, min_fg3m, max_fg3m, min_fg3a, max_fg3a, min_ftm, max_ftm, min_fta, max_fta, min_minutes, max_minutes
+- aggregate threshold filters: min_<stat>_<aggregation>, max_<stat>_<aggregation>, gt_<stat>_<aggregation>, or lt_<stat>_<aggregation>, where aggregation is mean, sum, count, min, max, or stddev. Supported composite stats include stl_blk.
+- min_games_played
 - present_player_ids
 - absent_player_ids
 
@@ -264,6 +266,15 @@ Rules:
   - For "blowout wins by X+", use: {"game_outcome": "win", "min_point_differential": X}
   - For "blowout losses by X+", use: {"game_outcome": "loss", "max_point_differential": -X}
 - min_*/max_* stat thresholds: integer/float (filter games by stat values)
+- aggregate threshold filters are integer/float and filter grouped leaderboards by aggregated stat values
+  - "at least 15 points per game" => {"min_pts_mean": 15}
+  - "more than 2 steals + blocks per game" => {"gt_stl_blk_mean": 2}
+  - "whose season high was at least 40 points" => {"min_pts_max": 40}
+  - "whose worst rebounding game was at least 5 rebounds" => {"min_reb_min": 5}
+  - "with no more than 3 turnovers per game" => {"max_tov_mean": 3}
+  - "with at least 60 games" => prefer {"min_games_played": 60}; {"min_game_id_count": 60} is also supported
+- min_games_played: positive integer (for grouped player leaderboards with a minimum games played requirement)
+- For player_game_stats, only rows with minutes > 0 count as played games. DNP/0-minute rows are excluded by the executor.
 - present_player_ids: list of integers (include ONLY games where ALL these players played)
 - absent_player_ids: list of integers (exclude games where ANY of these players played)
 
@@ -329,15 +340,24 @@ Shape:
   "<raw_field>": "mean" | "sum" | "count" | "min" | "max" | "stddev"
 }
 
+Multiple aggregations for the same raw field are allowed by using a list:
+{
+  "<raw_field>": ["mean", "stddev"]
+}
+
 Common fields:
 Player: pts, reb, ast, stl, blk, tov, fgm, fga, fg3m, fg3a, ftm, fta, oreb, dreb, minutes, fouls, plus_minus, game_id
 Team: pf, pa, reb, ast, stl, blk, tov, fgm, fga, fg3m, fg3a, ftm, fta, oreb, dreb, game_id
+Composite: stl_blk
 
 Important:
 - use "pts" for player points
 - use "pf" for team points-for
 - do not use "pts" in team_game_stats queries
 - use "stddev" when the user asks for standard deviation, variability, volatility, or consistency of a stat across games
+- when the user asks for a grouped leaderboard among players/teams who meet an aggregate threshold, use the corresponding aggregate threshold filter and include that stat aggregation
+- aggregate threshold filter shape is "min_<field>_<agg>", "max_<field>_<agg>", "gt_<field>_<agg>", or "lt_<field>_<agg>"; for steals + blocks per game, use "gt_stl_blk_mean" for "more than" or "min_stl_blk_mean" for "at least", and include "stl_blk": "mean" in aggregations
+- when the same stat is needed for both a threshold and sorting/output using another aggregation, use a list aggregation, for example: "pts": ["mean", "stddev"]
 
 **CRITICAL RULE FOR RECENT GAMES:**
 When the question asks about "last N games" or "recent games" for a specific player or team:
@@ -375,6 +395,43 @@ CORRECT query_spec:
   "group_by": ["player_id"],
   "aggregations": {"pts": "stddev", "game_id": "count"},
   "sort": {"by": "pts_stddev", "direction": "desc"},
+  "limit": 10
+}
+
+Question: "Which players this regular season had the lowest standard deviation in points with a minimum of 40 games played?"
+CORRECT query_spec:
+{
+  "scope": "player_game_stats",
+  "subject": {"type": "league"},
+  "filters": {"season": "2025-26", "season_type": ["Regular Season"], "min_games_played": 40},
+  "group_by": ["player_id"],
+  "aggregations": {"pts": "stddev", "game_id": "count"},
+  "sort": {"by": "pts_stddev", "direction": "asc"},
+  "limit": 10
+}
+
+Question: "Among players who average at least 15 points per game, which players this regular season had the lowest standard deviation in points?"
+CORRECT query_spec:
+{
+  "scope": "player_game_stats",
+  "subject": {"type": "league"},
+  "filters": {"season": "2025-26", "season_type": ["Regular Season"], "min_pts_mean": 15},
+  "group_by": ["player_id"],
+  "aggregations": {"pts": ["mean", "stddev"], "game_id": "count"},
+  "sort": {"by": "pts_stddev", "direction": "asc"},
+  "limit": 10
+}
+
+Question: "Among players who averaged more than 2 steals + blocks this season, which players had the highest 3 point percentage?"
+CORRECT query_spec:
+{
+  "scope": "player_game_stats",
+  "subject": {"type": "league"},
+  "filters": {"season": "2025-26", "season_type": ["Regular Season"], "gt_stl_blk_mean": 2},
+  "group_by": ["player_id"],
+  "aggregations": {"stl_blk": "mean", "fg3m": "sum", "fg3a": "sum", "game_id": "count"},
+  "derived_metrics": ["fg3_pct"],
+  "sort": {"by": "fg3_pct", "direction": "desc"},
   "limit": 10
 }
 
