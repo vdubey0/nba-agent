@@ -11,6 +11,7 @@ from sqlalchemy import text
 from app.chat_flow import answer_question, process_message
 from app.config import APP_ENV, APP_VERSION, AUTO_CREATE_TABLES, CORS_ORIGINS, OPENAI_API_KEY
 from app.db import SessionLocal, engine
+from app.orchestrator.entity_extraction import extract_entity_mentions, resolve_entity_mentions
 from app.schema import ensure_tables_if_enabled
 
 
@@ -62,6 +63,18 @@ class ChatResponse(BaseModel):
 class QueryRequest(BaseModel):
     message: str
     include_steps: bool = False
+
+
+class ResolveEntitiesRequest(BaseModel):
+    message: str
+    conversation_id: Optional[str] = None
+
+
+class ResolveEntitiesResponse(BaseModel):
+    status: str
+    resolved_entities: Optional[list[dict[str, Any]]] = None
+    conversation_id: Optional[str] = None
+    error: Optional[dict[str, Any]] = None
 
 
 class QueryResponse(BaseModel):
@@ -134,6 +147,57 @@ async def query(request: QueryRequest):
         return QueryResponse(**result)
     except Exception as exc:
         logger.exception("Unexpected top-level failure in /api/query")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        session.close()
+
+
+@app.post("/api/resolve-entity", response_model=ResolveEntitiesResponse)
+@app.post("/api/resolve-entities", response_model=ResolveEntitiesResponse)
+async def resolve_entities(request: ResolveEntitiesRequest):
+    logger.info("Received /api/resolve-entities request for question: %s", request.message)
+    session = SessionLocal()
+    conversation = None
+
+    if request.conversation_id:
+        from app.models.conversation import conversation_store
+
+        conversation = conversation_store.get_conversation(request.conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+    try:
+        mentions = extract_entity_mentions(
+            client=client,
+            question=request.message,
+            conversation=conversation,
+        )
+
+        if isinstance(mentions, dict) and mentions.get("status") == "failed":
+            return ResolveEntitiesResponse(
+                status="error",
+                conversation_id=request.conversation_id,
+                error={
+                    "message": "Failed to extract entities.",
+                    "details": mentions,
+                },
+            )
+
+        entities = resolve_entity_mentions(
+            session=session,
+            mentions=mentions,
+            conversation=conversation,
+        )
+
+        return ResolveEntitiesResponse(
+            status="success",
+            resolved_entities=entities,
+            conversation_id=request.conversation_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected top-level failure in /api/resolve-entities")
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
         session.close()
