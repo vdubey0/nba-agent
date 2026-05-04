@@ -152,7 +152,6 @@ async def query(request: QueryRequest):
         session.close()
 
 
-@app.post("/api/resolve-entity", response_model=ResolveEntitiesResponse)
 @app.post("/api/resolve-entities", response_model=ResolveEntitiesResponse)
 async def resolve_entities(request: ResolveEntitiesRequest):
     logger.info("Received /api/resolve-entities request for question: %s", request.message)
