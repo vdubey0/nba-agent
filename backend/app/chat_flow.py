@@ -11,6 +11,7 @@ import logging
 
 from openai import OpenAI
 
+from app.config import ANALYTICS_MAX_FINAL_ROWS_STORED
 from app.db import SessionLocal
 from app.models.conversation import Conversation, ResolvedEntity, conversation_store
 from app.orchestrator.agent import execute_plan
@@ -90,6 +91,13 @@ def process_message(
             "error": {
                 "message": "An unexpected error occurred",
                 "details": str(exc),
+            },
+            "_analytics": {
+                "outcome_hint": "error",
+                "error": {
+                    "message": "An unexpected error occurred",
+                    "details": str(exc),
+                },
             },
         }
     finally:
@@ -207,6 +215,8 @@ def _run_answer_pipeline(
         )
 
     answer_text = answer.get("output", "No answer generated")
+    final_rows = execution_result.get("final_output", [])
+    final_rows_for_analytics = final_rows[:ANALYTICS_MAX_FINAL_ROWS_STORED]
     intermediate_steps = None
     if include_steps:
         intermediate_steps = {
@@ -232,7 +242,23 @@ def _run_answer_pipeline(
         "plan": plan,
         "execution_metadata": {
             "step_count": len(plan.get("steps", [])),
-            "result_row_count": len(execution_result.get("final_output", [])),
+            "result_row_count": len(final_rows),
+        },
+        "_analytics": {
+            "outcome_hint": "answered",
+            "entities": entities,
+            "plan": plan,
+            "execution_result": {
+                "status": execution_result.get("status"),
+                "message": execution_result.get("message"),
+                "step_outputs": execution_result.get("step_outputs", {}),
+                "final_output": final_rows_for_analytics,
+                "final_output_truncated": len(final_rows_for_analytics) < len(final_rows),
+            },
+            "execution_metadata": {
+                "step_count": len(plan.get("steps", [])),
+                "result_row_count": len(final_rows),
+            },
         },
     }
 
@@ -272,6 +298,11 @@ def _build_clarification_result(
         "clarification": clarification_dict,
         "intermediate_steps": None,
         "error": None,
+        "_analytics": {
+            "outcome_hint": "needs_clarification",
+            "entities": [ambiguous_entity],
+            "clarification": clarification_dict,
+        },
     }
 
 
@@ -299,6 +330,10 @@ def _build_error_result(
         "clarification": None,
         "intermediate_steps": None,
         "error": error_payload,
+        "_analytics": {
+            "outcome_hint": "error",
+            "error": error_payload,
+        },
     }
 
 
@@ -322,6 +357,11 @@ def _handle_clarification_response(
             "clarification": clarification.to_dict(),
             "intermediate_steps": None,
             "error": {"message": error_msg},
+            "_analytics": {
+                "outcome_hint": "needs_clarification",
+                "error": {"message": error_msg},
+                "clarification": clarification.to_dict(),
+            },
         }
 
     entity_type = selected_option["entity_type"]
@@ -361,6 +401,10 @@ def _handle_clarification_response(
             "clarification": None,
             "intermediate_steps": None,
             "error": {"message": error_msg},
+            "_analytics": {
+                "outcome_hint": "error",
+                "error": {"message": error_msg},
+            },
         }
 
     logger.info("Continuing after clarification with resolved entity: %s", resolved_entity.resolved_name)

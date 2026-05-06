@@ -17,6 +17,7 @@ import argparse
 import json
 import statistics
 import time
+import uuid
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, asdict
@@ -325,12 +326,15 @@ def evaluate_case(case: dict[str, Any], payload: dict[str, Any], latency_ms: flo
     )
 
 
-def run_case(base_url: str, case: dict[str, Any], timeout: float) -> CaseResult:
+def run_case(base_url: str, case: dict[str, Any], timeout: float, benchmark_run_id: str | None = None) -> CaseResult:
     url = f"{base_url.rstrip('/')}/api/chat"
     payload = {
         "conversation_id": None,
         "message": case["question"],
         "include_steps": True,
+        "source": "benchmark",
+        "benchmark_run_id": benchmark_run_id,
+        "benchmark_case_id": case["id"],
     }
 
     started = time.perf_counter()
@@ -418,11 +422,12 @@ def main() -> int:
 
     cases = BENCHMARK_CASES[: args.limit] if args.limit else BENCHMARK_CASES
     results: list[CaseResult] = []
+    benchmark_run_id = str(uuid.uuid4())
 
     print(f"Running {len(cases)} /api/chat benchmark cases against {args.base_url}")
     for index, case in enumerate(cases, 1):
         print(f"[{index}/{len(cases)}] {case['id']}: {case['question']}")
-        result = run_case(args.base_url, case, timeout=args.timeout)
+        result = run_case(args.base_url, case, timeout=args.timeout, benchmark_run_id=benchmark_run_id)
         results.append(result)
         verdict = "PASS" if result.passed else "FAIL"
         issues = f" issues={','.join(result.issues)}" if result.issues else ""
@@ -434,6 +439,7 @@ def main() -> int:
     summary = summarize(results)
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "benchmark_run_id": benchmark_run_id,
         "base_url": args.base_url,
         "summary": summary,
         "results": [asdict(result) for result in results],

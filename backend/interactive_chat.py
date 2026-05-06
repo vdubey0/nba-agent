@@ -8,7 +8,7 @@ Usage:
     python interactive_chat.py
 """
 
-from app.chat_flow import process_message
+from app.chat_service import run_tracked_chat_message
 from openai import OpenAI
 import sys
 
@@ -92,11 +92,12 @@ def main():
             
             # Process the message
             print("\n⏳ Processing...")
-            response = process_message(
+            response = run_tracked_chat_message(
                 client=client,
                 message=user_input,
                 conversation_id=conversation_id,
-                include_steps=False
+                include_steps=False,
+                source="interactive_chat",
             )
             
             # Update conversation ID

@@ -8,7 +8,8 @@ from openai import OpenAI
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from app.chat_flow import answer_question, process_message
+from app.analytics.routes import router as analytics_router
+from app.chat_service import run_tracked_chat_message
 from app.config import APP_ENV, APP_VERSION, AUTO_CREATE_TABLES, CORS_ORIGINS, OPENAI_API_KEY
 from app.db import SessionLocal, engine
 from app.orchestrator.entity_extraction import extract_entity_mentions, resolve_entity_mentions
@@ -32,6 +33,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(analytics_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,6 +50,9 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None
     message: str
     include_steps: bool = False
+    source: Optional[str] = None
+    benchmark_run_id: Optional[str] = None
+    benchmark_case_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -63,6 +68,9 @@ class ChatResponse(BaseModel):
 class QueryRequest(BaseModel):
     message: str
     include_steps: bool = False
+    source: Optional[str] = None
+    benchmark_run_id: Optional[str] = None
+    benchmark_case_id: Optional[str] = None
 
 
 class ResolveEntitiesRequest(BaseModel):
@@ -121,11 +129,15 @@ def list_tables():
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     try:
-        result = process_message(
+        result = run_tracked_chat_message(
             client=client,
             message=request.message,
             conversation_id=request.conversation_id,
             include_steps=request.include_steps,
+            source=request.source or "api_chat",
+            http_status=200,
+            benchmark_run_id=request.benchmark_run_id,
+            benchmark_case_id=request.benchmark_case_id,
         )
         return ChatResponse(**result)
     except Exception as exc:
@@ -136,20 +148,21 @@ async def chat(request: ChatRequest):
 @app.post("/api/query", response_model=QueryResponse)
 async def query(request: QueryRequest):
     logger.info("Received /api/query request for question: %s", request.message)
-    session = SessionLocal()
     try:
-        result = answer_question(
+        result = run_tracked_chat_message(
             client=client,
-            session=session,
             message=request.message,
+            conversation_id=None,
             include_steps=request.include_steps,
+            source=request.source or "api_query",
+            http_status=200,
+            benchmark_run_id=request.benchmark_run_id,
+            benchmark_case_id=request.benchmark_case_id,
         )
         return QueryResponse(**result)
     except Exception as exc:
         logger.exception("Unexpected top-level failure in /api/query")
         raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        session.close()
 
 
 @app.post("/api/resolve-entities", response_model=ResolveEntitiesResponse)

@@ -53,6 +53,55 @@ export const healthCheck = async () => {
   }
 };
 
+export const getAnalyticsSummary = async (days = 30, source = '') => {
+  const response = await api.get('/admin/api/analytics/summary', {
+    params: { days, source: source || undefined },
+  });
+  return response.data;
+};
+
+export const getAnalyticsPerformance = async (days = 30, source = '') => {
+  const response = await api.get('/admin/api/analytics/performance', {
+    params: { days, source: source || undefined },
+  });
+  return response.data;
+};
+
+export const getAnalyticsLatencyDistribution = async (days = 30, source = '') => {
+  const response = await api.get('/admin/api/analytics/latency-distribution', {
+    params: { days, source: source || undefined },
+  });
+  return response.data;
+};
+
+export const getAnalyticsAccuracy = async (days = 30, source = '') => {
+  const response = await api.get('/admin/api/analytics/accuracy', {
+    params: { days, source: source || undefined },
+  });
+  return response.data;
+};
+
+export const getAnalyticsQuestions = async (days = 30, source = '') => {
+  const response = await api.get('/admin/api/analytics/questions', {
+    params: { days, source: source || undefined },
+  });
+  return response.data;
+};
+
+export const invokeAutomaticReview = async (eventId) => {
+  const response = await api.post(`/admin/api/analytics/events/${eventId}/automatic-review`);
+  return response.data;
+};
+
+export const applyAutomaticReview = async (eventId, outcome, llmReview, reviewer = 'user') => {
+  const response = await api.post(`/admin/api/analytics/events/${eventId}/apply-review`, {
+    outcome,
+    reviewer,
+    llm_review: llmReview,
+  });
+  return response.data;
+};
+
 export default api;
 
 // Made with Bob
