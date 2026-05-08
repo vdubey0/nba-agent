@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import and_, func, or_
+from sqlalchemy import String, and_, cast, func, not_, or_
 from sqlalchemy.orm import Session
 
 from app.analytics.classification import classify_complexity, classify_intent, extract_entities, extract_stats, extract_time_range
@@ -23,6 +23,12 @@ from app.models.analytics import (
 
 
 router = APIRouter(prefix="/admin/api/analytics", tags=["analytics"])
+
+
+OPENAI_QUOTA_ERROR_MARKERS = (
+    "insufficient_quota",
+    "exceeded your current quota",
+)
 
 
 class ApplyReviewRequest(BaseModel):
@@ -65,6 +71,25 @@ def _base_events(session: Session, days: int, source: str | None = None):
     elif source:
         query = query.filter(ChatQueryEvent.source == source)
     return query
+
+
+def _openai_quota_error_clause():
+    error_message = func.coalesce(ChatQueryEvent.error_message, "")
+    payload_text = func.coalesce(cast(ChatQueryEvent.analytics_payload, String), "")
+    return or_(
+        *[
+            error_message.ilike(f"%{marker}%")
+            for marker in OPENAI_QUOTA_ERROR_MARKERS
+        ],
+        *[
+            payload_text.ilike(f"%{marker}%")
+            for marker in OPENAI_QUOTA_ERROR_MARKERS
+        ],
+    )
+
+
+def _dashboard_events(session: Session, days: int, source: str | None = None):
+    return _base_events(session, days, source).filter(not_(_openai_quota_error_clause()))
 
 
 def _hour_bucket(value: datetime | None) -> str:
@@ -127,7 +152,7 @@ def analytics_summary(
     source: str | None = None,
     session: Session = Depends(get_session),
 ):
-    events = _base_events(session, days, source)
+    events = _dashboard_events(session, days, source)
     total = events.count()
     avg_latency = events.with_entities(func.avg(ChatQueryEvent.latency_ms)).scalar() or 0
     error_count = (
@@ -170,7 +195,7 @@ def analytics_latency_distribution(
     session: Session = Depends(get_session),
 ):
     rows = (
-        _base_events(session, days, source)
+        _dashboard_events(session, days, source)
         .join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id, isouter=True)
         .filter(ChatQueryEvent.latency_ms.isnot(None))
         .filter(ChatQueryEvent.error_type.is_(None))
@@ -200,7 +225,7 @@ def analytics_performance(
     source: str | None = None,
     session: Session = Depends(get_session),
 ):
-    events = _base_events(session, days, source)
+    events = _dashboard_events(session, days, source)
     by_day = (
         events.with_entities(
             func.date(ChatQueryEvent.created_at).label("day"),
@@ -254,7 +279,7 @@ def analytics_accuracy(
     source: str | None = None,
     session: Session = Depends(get_session),
 ):
-    events = _base_events(session, days, source).subquery()
+    events = _dashboard_events(session, days, source).subquery()
     outcome_rows = (
         session.query(ChatQueryEvent, ChatEvaluation)
         .join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id)
@@ -347,7 +372,7 @@ def analytics_questions(
     source: str | None = None,
     session: Session = Depends(get_session),
 ):
-    events = _base_events(session, days, source).subquery()
+    events = _dashboard_events(session, days, source).subquery()
     intents = (
         session.query(ChatQuestionAnalysis.intent_category, func.count(ChatQuestionAnalysis.id), func.avg(ChatQueryEvent.latency_ms))
         .join(events, events.c.id == ChatQuestionAnalysis.query_event_id)
@@ -413,7 +438,7 @@ def analytics_questions(
         key=lambda item: item["query_count"],
         reverse=True,
     )[:20]
-    recent = _base_events(session, days, source).order_by(ChatQueryEvent.created_at.desc()).limit(50).all()
+    recent = _dashboard_events(session, days, source).order_by(ChatQueryEvent.created_at.desc()).limit(50).all()
     return {
         "intents": [
             {"intent": intent or "unknown", "query_count": count, "avg_latency_ms": round(float(avg or 0), 2)}
@@ -437,7 +462,7 @@ def analytics_events(
     session: Session = Depends(get_session),
 ):
     query = (
-        _base_events(session, days, source)
+        _dashboard_events(session, days, source)
         .join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id, isouter=True)
         .join(ChatQuestionAnalysis, ChatQuestionAnalysis.query_event_id == ChatQueryEvent.id, isouter=True)
     )
@@ -591,9 +616,34 @@ def _event_summary(event: ChatQueryEvent) -> dict[str, Any]:
         "step_count": event.step_count,
         "result_row_count": event.result_row_count,
         "error_type": event.error_type,
+        "error_message": _event_error_message(event),
         "evaluation": evaluation,
         "question_analysis": question_analysis,
     }
+
+
+def _event_error_message(event: ChatQueryEvent) -> str | None:
+    if event.error_message:
+        payload_error = (event.analytics_payload or {}).get("error")
+        details = payload_error.get("details") if isinstance(payload_error, dict) else None
+        if (
+            details
+            and event.error_message == "An unexpected error occurred"
+            and str(details) != event.error_message
+        ):
+            return f"{event.error_message}\n\nDetails: {details}"
+        return event.error_message
+
+    payload_error = (event.analytics_payload or {}).get("error")
+    if isinstance(payload_error, dict):
+        message = payload_error.get("message")
+        details = payload_error.get("details")
+        if message and details and str(details) != message:
+            return f"{message}\n\nDetails: {details}"
+        return message or (str(details) if details else None)
+    if payload_error:
+        return str(payload_error)
+    return None
 
 
 def _evaluation_summary(evaluation: ChatEvaluation | None, display_outcome: str | None = None) -> dict[str, Any] | None:

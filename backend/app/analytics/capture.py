@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
+import json
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 from app.config import ANALYTICS_ENABLED, ANALYTICS_STORE_INTERMEDIATE_STEPS
 from app.db import SessionLocal
-from app.analytics.processor import process_event
 from app.models.analytics import AnalyticsJob, ChatQueryEvent
 
 
@@ -18,7 +18,19 @@ def _error_message(error: Any) -> str | None:
     if not error:
         return None
     if isinstance(error, dict):
-        return error.get("message") or error.get("details") or str(error)
+        message = error.get("message")
+        details = error.get("details")
+        if details is None:
+            return message or str(error)
+
+        if isinstance(details, (dict, list)):
+            details_text = json.dumps(_json_safe(details), sort_keys=True)
+        else:
+            details_text = str(details)
+
+        if message and details_text and details_text != message:
+            return f"{message}\n\nDetails: {details_text}"
+        return message or details_text
     return str(error)
 
 
@@ -90,31 +102,15 @@ def record_chat_event(
         )
         session.add(event)
         session.flush()
-        session.commit()
         event_id = event.id
 
-        try:
-            event = session.query(ChatQueryEvent).filter(ChatQueryEvent.id == event_id).one()
-            process_event(session, event, allow_llm_claim_extraction=False)
-            job = AnalyticsJob(
-                query_event_id=event_id,
-                job_type="process_chat_event",
-                status="completed",
-                completed_at=datetime.utcnow(),
-            )
-            session.add(job)
-            session.commit()
-        except Exception as exc:
-            session.rollback()
-            job = AnalyticsJob(
-                query_event_id=event_id,
-                job_type="process_chat_event",
-                status="retrying",
-                last_error=repr(exc),
-            )
-            session.add(job)
-            session.commit()
-            logger.exception("Failed to process analytics event inline")
+        job = AnalyticsJob(
+            query_event_id=event_id,
+            job_type="process_chat_event",
+            status="pending",
+        )
+        session.add(job)
+        session.commit()
 
         return event_id
     except Exception:

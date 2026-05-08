@@ -14,12 +14,46 @@ STAT_THRESHOLD_FIELDS = [
 AGGREGATABLE_FIELDS = [
     'pts', 'pf', 'pa', 'reb', 'ast', 'stl', 'blk', 'tov', 'fgm', 'fga',
     'fg3m', 'fg3a', 'ftm', 'fta', 'oreb', 'dreb', 'minutes', 'fouls',
-    'plus_minus', 'game_id'
+    'plus_minus', 'point_differential', 'game_id'
 ]
 COMPOSITE_AGGREGATABLE_FIELDS = {
     'stl_blk': ('stl', 'blk'),
 }
 ALL_AGGREGATABLE_FIELDS = AGGREGATABLE_FIELDS + list(COMPOSITE_AGGREGATABLE_FIELDS.keys())
+DERIVED_METRIC_REQUIRED_AGGREGATIONS = {
+    'ts_pct': {'pts': 'sum', 'pf': 'sum', 'fga': 'sum', 'fta': 'sum'},
+    'efg_pct': {'fgm': 'sum', 'fg3m': 'sum', 'fga': 'sum'},
+    'fg_pct': {'fgm': 'sum', 'fga': 'sum'},
+    'fg3_pct': {'fg3m': 'sum', 'fg3a': 'sum'},
+    'ft_pct': {'ftm': 'sum', 'fta': 'sum'},
+    'usage_rate': {'fga': 'sum', 'fta': 'sum', 'tov': 'sum', 'minutes': 'sum', 'game_id': 'count'},
+    'ast_pct': {'ast': 'sum', 'fgm': 'sum'},
+    'reb_pct': {'reb': 'sum', 'game_id': 'count'},
+    'oreb_pct': {'oreb': 'sum', 'game_id': 'count'},
+    'dreb_pct': {'dreb': 'sum', 'game_id': 'count'},
+    'stl_pct': {'stl': 'sum', 'game_id': 'count'},
+    'blk_pct': {'blk': 'sum', 'game_id': 'count'},
+    'game_score': {
+        'pts': 'sum', 'fgm': 'sum', 'fga': 'sum', 'ftm': 'sum', 'fta': 'sum',
+        'oreb': 'sum', 'dreb': 'sum', 'stl': 'sum', 'ast': 'sum', 'blk': 'sum',
+        'fouls': 'sum', 'tov': 'sum', 'game_id': 'count',
+    },
+    'ast_to_ratio': {'ast': 'sum', 'tov': 'sum'},
+    'pts_reb': {'pts': 'sum', 'reb': 'sum'},
+    'pts_ast': {'pts': 'sum', 'ast': 'sum'},
+    'pra': {'pts': 'sum', 'reb': 'sum', 'ast': 'sum'},
+    'reb_ast': {'reb': 'sum', 'ast': 'sum'},
+    'stl_blk': {'stl': 'sum', 'blk': 'sum'},
+    'fantasy_score': {'pts': 'sum', 'reb': 'sum', 'ast': 'sum', 'stl': 'sum', 'blk': 'sum', 'tov': 'sum'},
+    'pace': {'fga': 'sum', 'fta': 'sum', 'oreb': 'sum', 'tov': 'sum', 'game_id': 'count'},
+    'off_rating': {'pf': 'sum', 'fga': 'sum', 'fta': 'sum', 'oreb': 'sum', 'tov': 'sum'},
+    'def_rating': {'pa': 'sum', 'fga': 'sum', 'fta': 'sum', 'oreb': 'sum', 'tov': 'sum'},
+    'net_rating': {'pf': 'sum', 'pa': 'sum', 'fga': 'sum', 'fta': 'sum', 'oreb': 'sum', 'tov': 'sum'},
+    'ast_ratio': {'ast': 'sum', 'fgm': 'sum'},
+    'oreb_pct_team': {'oreb': 'sum', 'game_id': 'count'},
+    'dreb_pct_team': {'dreb': 'sum', 'game_id': 'count'},
+    'tov_pct_team': {'tov': 'sum', 'fga': 'sum', 'fta': 'sum'},
+}
 AGG_THRESHOLD_FILTERS = [
     f'{prefix}_{field}_{agg_type}'
     for field in ALL_AGGREGATABLE_FIELDS
@@ -46,7 +80,10 @@ def parse_agg_threshold_filter(filter_key: str) -> tuple[str, str, str] | None:
 def normalize_aggregations(
     aggregations: dict,
     sort_spec: dict | None = None,
-    filters: dict | None = None
+    filters: dict | None = None,
+    derived_metrics: list[str] | None = None,
+    scope_name: str | None = None,
+    has_group_by: bool = False,
 ) -> dict[str, list[str]]:
     normalized = {}
 
@@ -80,6 +117,21 @@ def normalize_aggregations(
             normalized.setdefault(agg_field, [])
             if agg_type not in normalized[agg_field]:
                 normalized[agg_field].append(agg_type)
+
+    # Grouped or explicitly aggregated derived metrics need their component
+    # aggregations present even when the planner omitted them.
+    if derived_metrics and (has_group_by or normalized):
+        for metric in derived_metrics:
+            for field, agg_type in DERIVED_METRIC_REQUIRED_AGGREGATIONS.get(metric, {}).items():
+                if field == 'pts' and scope_name == 'team_game_stats':
+                    continue
+                if field == 'pf' and scope_name == 'player_game_stats':
+                    continue
+                if field not in ALL_AGGREGATABLE_FIELDS:
+                    continue
+                normalized.setdefault(field, [])
+                if agg_type not in normalized[field]:
+                    normalized[field].append(agg_type)
 
     return normalized
 
@@ -607,16 +659,21 @@ def run_query_spec(session, query_spec: dict) -> dict:
 
     subject = query_spec.get('subject')
     group_by = query_spec.get('group_by', [])
+    requested_derived_metrics = query_spec.get('derived_metrics', [])
     aggregations = normalize_aggregations(
         query_spec.get('aggregations', {}),
         query_spec.get('sort'),
-        filters
+        filters,
+        requested_derived_metrics,
+        scope_name,
+        len(group_by) > 0,
     )
-    derived_metrics = query_spec.get('derived_metrics', [])
+    derived_metrics = requested_derived_metrics
 
     has_group_by = len(group_by) > 0
     has_aggs = len(aggregations) > 0
     has_derived = len(derived_metrics) > 0
+    aggregate_derived_metrics = requested_derived_metrics if has_group_by or has_aggs else []
 
     # ---------------------------------------------------
     # STEP 1: build base query INCLUDING game_date column
@@ -982,7 +1039,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
             else_=(numerator / denominator)
         ).label(label)
 
-    if 'fg_pct' in derived_metrics:
+    if 'fg_pct' in aggregate_derived_metrics:
         fgm_sum = metric_component_sum('fgm')
         fga_sum = metric_component_sum('fga')
         if fgm_sum is None or fga_sum is None:
@@ -994,7 +1051,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['fg_pct'] = expr
 
-    if 'fg3_pct' in derived_metrics:
+    if 'fg3_pct' in aggregate_derived_metrics:
         fg3m_sum = metric_component_sum('fg3m')
         fg3a_sum = metric_component_sum('fg3a')
         if fg3m_sum is None or fg3a_sum is None:
@@ -1006,7 +1063,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['fg3_pct'] = expr
 
-    if 'ft_pct' in derived_metrics:
+    if 'ft_pct' in aggregate_derived_metrics:
         ftm_sum = metric_component_sum('ftm')
         fta_sum = metric_component_sum('fta')
         if ftm_sum is None or fta_sum is None:
@@ -1018,7 +1075,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['ft_pct'] = expr
 
-    if 'efg_pct' in derived_metrics:
+    if 'efg_pct' in aggregate_derived_metrics:
         fgm_sum = metric_component_sum('fgm')
         fg3m_sum = metric_component_sum('fg3m')
         fga_sum = metric_component_sum('fga')
@@ -1031,7 +1088,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['efg_pct'] = expr
 
-    if 'ts_pct' in derived_metrics:
+    if 'ts_pct' in aggregate_derived_metrics:
         points_sum = metric_component_sum(points_col_name)
         fga_sum = metric_component_sum('fga')
         fta_sum = metric_component_sum('fta')
@@ -1048,7 +1105,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
     # -------------------------
     # Advanced Player Metrics
     # -------------------------
-    if 'tov_pct' in derived_metrics:
+    if 'tov_pct' in aggregate_derived_metrics:
         tov_sum = metric_component_sum('tov')
         fga_sum = metric_component_sum('fga')
         fta_sum = metric_component_sum('fta')
@@ -1062,7 +1119,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['tov_pct'] = expr
 
-    if 'usage_rate' in derived_metrics:
+    if 'usage_rate' in aggregate_derived_metrics:
         # Usage Rate (Player only): Estimate of possessions used while on court
         # Simplified: 100 * (FGA + 0.44*FTA + TOV) / (Team possessions estimate)
         # Without team data, we return a simplified metric based on player activity
@@ -1092,7 +1149,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['usage_rate'] = expr
 
-    if 'ast_pct' in derived_metrics:
+    if 'ast_pct' in aggregate_derived_metrics:
         # Assist Percentage (Player): 100 * AST / (((MP/(Team_MP/5)) * Team_FGM) - FGM)
         # Simplified: assists per field goal made
         if scope_name != 'player_game_stats':
@@ -1112,7 +1169,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['ast_pct'] = expr
 
-    if 'reb_pct' in derived_metrics:
+    if 'reb_pct' in aggregate_derived_metrics:
         # Rebound Percentage: Simplified as rebounds per game
         # True calculation requires team/opponent data which isn't available in aggregated queries
         reb_sum = metric_component_sum('reb')
@@ -1129,7 +1186,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['reb_pct'] = expr
 
-    if 'oreb_pct' in derived_metrics:
+    if 'oreb_pct' in aggregate_derived_metrics:
         oreb_sum = metric_component_sum('oreb')
         game_count = agg_label_map.get('game_id_count')
         if oreb_sum is None or game_count is None:
@@ -1158,7 +1215,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['oreb_pct'] = expr
 
-    if 'dreb_pct' in derived_metrics:
+    if 'dreb_pct' in aggregate_derived_metrics:
         dreb_sum = metric_component_sum('dreb')
         game_count = agg_label_map.get('game_id_count')
         if dreb_sum is None or game_count is None:
@@ -1187,7 +1244,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['dreb_pct'] = expr
 
-    if 'stl_pct' in derived_metrics:
+    if 'stl_pct' in aggregate_derived_metrics:
         # Steal Percentage: steals per game
         stl_sum = metric_component_sum('stl')
         game_count = agg_label_map.get('game_id_count')
@@ -1203,7 +1260,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['stl_pct'] = expr
 
-    if 'blk_pct' in derived_metrics:
+    if 'blk_pct' in aggregate_derived_metrics:
         # Block Percentage: blocks per game
         blk_sum = metric_component_sum('blk')
         game_count = agg_label_map.get('game_id_count')
@@ -1219,7 +1276,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['blk_pct'] = expr
 
-    if 'game_score' in derived_metrics:
+    if 'game_score' in aggregate_derived_metrics:
         # Game Score: PTS + 0.4*FGM - 0.7*FGA - 0.4*(FTA-FTM) + 0.7*OREB + 0.3*DREB + STL + 0.7*AST + 0.7*BLK - 0.4*PF - TOV
         # Return average per game
         if scope_name != 'player_game_stats':
@@ -1259,7 +1316,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(game_score_expr)
         derived_metric_map['game_score'] = game_score_expr
 
-    if 'ast_to_ratio' in derived_metrics:
+    if 'ast_to_ratio' in aggregate_derived_metrics:
         # Assist to Turnover Ratio: AST / TOV
         # Higher is better - measures ball security and playmaking
         if scope_name != 'player_game_stats':
@@ -1283,7 +1340,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
     # -------------------------
     # Betting/Fantasy Metrics (Player only)
     # -------------------------
-    if 'pts_reb' in derived_metrics:
+    if 'pts_reb' in aggregate_derived_metrics:
         # Points + Rebounds (popular betting prop)
         if scope_name != 'player_game_stats':
             return {
@@ -1303,7 +1360,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['pts_reb'] = expr
 
-    if 'pts_ast' in derived_metrics:
+    if 'pts_ast' in aggregate_derived_metrics:
         # Points + Assists (popular betting prop)
         if scope_name != 'player_game_stats':
             return {
@@ -1323,7 +1380,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['pts_ast'] = expr
 
-    if 'pra' in derived_metrics:
+    if 'pra' in aggregate_derived_metrics:
         # Points + Rebounds + Assists (popular betting prop)
         if scope_name != 'player_game_stats':
             return {
@@ -1344,7 +1401,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['pra'] = expr
 
-    if 'reb_ast' in derived_metrics:
+    if 'reb_ast' in aggregate_derived_metrics:
         # Rebounds + Assists (betting prop)
         if scope_name != 'player_game_stats':
             return {
@@ -1364,7 +1421,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['reb_ast'] = expr
 
-    if 'stl_blk' in derived_metrics:
+    if 'stl_blk' in aggregate_derived_metrics:
         # Steals + Blocks (betting prop)
         if scope_name != 'player_game_stats':
             return {
@@ -1384,7 +1441,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['stl_blk'] = expr
 
-    if 'fantasy_score' in derived_metrics:
+    if 'fantasy_score' in aggregate_derived_metrics:
         # Fantasy Score: 1*PTS + 1.2*REB + 1.5*AST + 3*STL + 3*BLK - 1*TOV
         if scope_name != 'player_game_stats':
             return {
@@ -1419,7 +1476,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
     # -------------------------
     # Advanced Team Metrics
     # -------------------------
-    if 'pace' in derived_metrics:
+    if 'pace' in aggregate_derived_metrics:
         # Pace: Estimate possessions per game (48 minutes)
         # Formula: Total Possessions / Total Games
         # Where possessions = 0.5 * (Team_Poss + Opp_Poss)
@@ -1469,7 +1526,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(pace_expr)
         derived_metric_map['pace'] = pace_expr
 
-    if 'off_rating' in derived_metrics:
+    if 'off_rating' in aggregate_derived_metrics:
         # Offensive Rating: 100 * (Points / Possessions)
         # Only supported for team stats
         if scope_name != 'team_game_stats':
@@ -1494,7 +1551,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['off_rating'] = expr
 
-    if 'def_rating' in derived_metrics:
+    if 'def_rating' in aggregate_derived_metrics:
         # Defensive Rating: 100 * (Points_Allowed / Possessions)
         # Only supported for team stats
         if scope_name != 'team_game_stats':
@@ -1519,7 +1576,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['def_rating'] = expr
 
-    if 'net_rating' in derived_metrics:
+    if 'net_rating' in aggregate_derived_metrics:
         # Net Rating: Offensive Rating - Defensive Rating
         # Only supported for team stats where we have both pf and pa
         if scope_name != 'team_game_stats':
@@ -1547,7 +1604,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(net_rating_expr)
         derived_metric_map['net_rating'] = net_rating_expr
 
-    if 'ast_ratio' in derived_metrics:
+    if 'ast_ratio' in aggregate_derived_metrics:
         # Assist Ratio: 100 * AST / FGM
         if scope_name != 'team_game_stats':
             return {
@@ -1567,7 +1624,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['ast_ratio'] = expr
 
-    if 'oreb_pct_team' in derived_metrics:
+    if 'oreb_pct_team' in aggregate_derived_metrics:
         # Team Offensive Rebound Percentage: 100 * OREB / (OREB + Opp_DREB)
         if scope_name != 'team_game_stats':
             return {
@@ -1596,7 +1653,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['oreb_pct_team'] = expr
 
-    if 'dreb_pct_team' in derived_metrics:
+    if 'dreb_pct_team' in aggregate_derived_metrics:
         # Team Defensive Rebound Percentage: 100 * DREB / (DREB + Opp_OREB)
         if scope_name != 'team_game_stats':
             return {
@@ -1625,7 +1682,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_exprs.append(expr)
         derived_metric_map['dreb_pct_team'] = expr
 
-    if 'tov_pct_team' in derived_metrics:
+    if 'tov_pct_team' in aggregate_derived_metrics:
         # Team Turnover Percentage: 100 * TOV / (FGA + 0.44*FTA + TOV)
         if scope_name != 'team_game_stats':
             return {
@@ -1650,6 +1707,8 @@ def run_query_spec(session, query_spec: dict) -> dict:
     # -------------------------
     # STEP 7: output shape
     # -------------------------
+    raw_derived_sort_map = {}
+
     if has_group_by:
         select_cols = []
         group_by_exprs = []
@@ -1709,55 +1768,100 @@ def run_query_spec(session, query_spec: dict) -> dict:
         query = query.with_entities(*agg_cols, *derived_metric_exprs)
 
     else:
-        if scope_name == 'team_game_stats' and perspective == 'opponent':
-            return {
-                "status": "failed",
-                "message": "Raw row output with perspective='opponent' is not supported for team_game_stats. Use aggregations and/or group_by."
-            }
+        raw_stat_cols = stat_cols if scope_name == 'team_game_stats' and perspective == 'opponent' else subject_cols
+
+        def raw_column(col_name: str):
+            if using_subquery and raw_stat_cols is subject_cols:
+                return raw_stat_cols[col_name]
+            return getattr(raw_stat_cols, col_name)
 
         if using_subquery:
-            raw_cols = [subject_cols[c.name].label(c.name) for c in base_scope.__table__.columns]
+            raw_cols = [raw_column(c.name).label(c.name) for c in base_scope.__table__.columns]
             raw_cols.append(subject_cols.game_date.label("game_date"))
         else:
-            raw_cols = [getattr(base_scope, c.name).label(c.name) for c in base_scope.__table__.columns]
+            raw_cols = [raw_column(c.name).label(c.name) for c in base_scope.__table__.columns]
             raw_cols.append(Game.game_date.label("game_date"))
 
-        label_cols = [
-            TeamMetaSelf.abbreviation.label('team_abbreviation'),
-            TeamMetaSelf.full_name.label('team_name'),
-            TeamMetaOpp.abbreviation.label('opponent_team_abbreviation'),
-            TeamMetaOpp.full_name.label('opponent_team_name'),
-        ]
+        if scope_name == 'team_game_stats' and perspective == 'opponent':
+            label_cols = [
+                TeamMetaOpp.abbreviation.label('team_abbreviation'),
+                TeamMetaOpp.full_name.label('team_name'),
+                TeamMetaSelf.abbreviation.label('opponent_team_abbreviation'),
+                TeamMetaSelf.full_name.label('opponent_team_name'),
+            ]
+        else:
+            label_cols = [
+                TeamMetaSelf.abbreviation.label('team_abbreviation'),
+                TeamMetaSelf.full_name.label('team_name'),
+                TeamMetaOpp.abbreviation.label('opponent_team_abbreviation'),
+                TeamMetaOpp.full_name.label('opponent_team_name'),
+            ]
 
         if scope_name == 'player_game_stats':
             label_cols = [Player.full_name.label('player_name')] + label_cols
 
         # Add derived metrics for raw rows (betting/fantasy metrics on individual games)
         raw_derived_exprs = []
-        if has_derived and scope_name == 'player_game_stats':
-            # For raw rows, use column values directly instead of aggregations
-            col_ref = subject_cols if using_subquery else base_scope
+
+        def add_raw_metric(label: str, expr):
+            raw_derived_exprs.append(expr.label(label))
+            raw_derived_sort_map[label] = expr
+
+        if has_derived:
+            # For raw rows, use column values directly instead of aggregations.
+            col_ref = raw_stat_cols if using_subquery or scope_name == 'team_game_stats' and perspective == 'opponent' else base_scope
             
-            if 'pts_reb' in derived_metrics:
-                raw_derived_exprs.append((col_ref.pts + col_ref.reb).label('pts_reb'))
-            if 'pts_ast' in derived_metrics:
-                raw_derived_exprs.append((col_ref.pts + col_ref.ast).label('pts_ast'))
-            if 'pra' in derived_metrics:
-                raw_derived_exprs.append((col_ref.pts + col_ref.reb + col_ref.ast).label('pra'))
-            if 'reb_ast' in derived_metrics:
-                raw_derived_exprs.append((col_ref.reb + col_ref.ast).label('reb_ast'))
-            if 'stl_blk' in derived_metrics:
-                raw_derived_exprs.append((col_ref.stl + col_ref.blk).label('stl_blk'))
-            if 'fantasy_score' in derived_metrics:
-                fantasy_expr = (
-                    1.0 * col_ref.pts +
-                    1.2 * col_ref.reb +
-                    1.5 * col_ref.ast +
-                    3.0 * col_ref.stl +
-                    3.0 * col_ref.blk -
-                    1.0 * col_ref.tov
-                ).label('fantasy_score')
-                raw_derived_exprs.append(fantasy_expr)
+            if scope_name == 'player_game_stats':
+                if 'pts_reb' in requested_derived_metrics:
+                    add_raw_metric('pts_reb', col_ref.pts + col_ref.reb)
+                if 'pts_ast' in requested_derived_metrics:
+                    add_raw_metric('pts_ast', col_ref.pts + col_ref.ast)
+                if 'pra' in requested_derived_metrics:
+                    add_raw_metric('pra', col_ref.pts + col_ref.reb + col_ref.ast)
+                if 'reb_ast' in requested_derived_metrics:
+                    add_raw_metric('reb_ast', col_ref.reb + col_ref.ast)
+                if 'stl_blk' in requested_derived_metrics:
+                    add_raw_metric('stl_blk', col_ref.stl + col_ref.blk)
+                if 'fantasy_score' in requested_derived_metrics:
+                    add_raw_metric(
+                        'fantasy_score',
+                        1.0 * col_ref.pts +
+                        1.2 * col_ref.reb +
+                        1.5 * col_ref.ast +
+                        3.0 * col_ref.stl +
+                        3.0 * col_ref.blk -
+                        1.0 * col_ref.tov
+                    )
+                if 'game_score' in requested_derived_metrics:
+                    add_raw_metric(
+                        'game_score',
+                        col_ref.pts + 0.4 * col_ref.fgm - 0.7 * col_ref.fga -
+                        0.4 * (col_ref.fta - col_ref.ftm) + 0.7 * col_ref.oreb +
+                        0.3 * col_ref.dreb + col_ref.stl + 0.7 * col_ref.ast +
+                        0.7 * col_ref.blk - 0.4 * col_ref.fouls - col_ref.tov
+                    )
+
+            if scope_name == 'team_game_stats':
+                possessions = col_ref.fga + 0.44 * col_ref.fta - col_ref.oreb + col_ref.tov
+                if 'fg_pct' in requested_derived_metrics:
+                    add_raw_metric('fg_pct', case((col_ref.fga == 0, None), else_=(cast(col_ref.fgm, Float) / col_ref.fga)))
+                if 'fg3_pct' in requested_derived_metrics:
+                    add_raw_metric('fg3_pct', case((col_ref.fg3a == 0, None), else_=(cast(col_ref.fg3m, Float) / col_ref.fg3a)))
+                if 'ft_pct' in requested_derived_metrics:
+                    add_raw_metric('ft_pct', case((col_ref.fta == 0, None), else_=(cast(col_ref.ftm, Float) / col_ref.fta)))
+                if 'efg_pct' in requested_derived_metrics:
+                    add_raw_metric('efg_pct', case((col_ref.fga == 0, None), else_=((col_ref.fgm + 0.5 * col_ref.fg3m) / col_ref.fga)))
+                if 'ts_pct' in requested_derived_metrics:
+                    ts_denom = 2.0 * (col_ref.fga + 0.44 * col_ref.fta)
+                    add_raw_metric('ts_pct', case((ts_denom == 0, None), else_=(col_ref.pf / ts_denom)))
+                if 'pace' in requested_derived_metrics:
+                    add_raw_metric('pace', possessions)
+                if 'off_rating' in requested_derived_metrics:
+                    add_raw_metric('off_rating', case((possessions == 0, None), else_=(100.0 * col_ref.pf / possessions)))
+                if 'def_rating' in requested_derived_metrics:
+                    add_raw_metric('def_rating', case((possessions == 0, None), else_=(100.0 * col_ref.pa / possessions)))
+                if 'net_rating' in requested_derived_metrics:
+                    add_raw_metric('net_rating', case((possessions == 0, None), else_=(100.0 * (col_ref.pf - col_ref.pa) / possessions)))
 
         query = query.with_entities(*raw_cols, *label_cols, *raw_derived_exprs)
 
@@ -1785,6 +1889,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
         "pf": getattr(stat_cols, "pf", None),
         "pa": getattr(stat_cols, "pa", None),
         "plus_minus": getattr(stat_cols, "plus_minus", None),
+        "point_differential": getattr(stat_cols, "point_differential", None),
         "player_id": getattr(subject_cols, "player_id", None),
         "team_id": getattr(subject_cols, "team_id", None),
         "opponent_team_id": getattr(subject_cols, "opponent_team_id", None),
@@ -1793,28 +1898,7 @@ def run_query_spec(session, query_spec: dict) -> dict:
     sortable_columns.update(agg_label_map)
     
     # For raw rows with derived metrics, use the raw expressions instead of aggregated ones
-    if not has_aggs and has_derived and scope_name == 'player_game_stats':
-        col_ref = subject_cols if using_subquery else base_scope
-        raw_derived_sort_map = {}
-        if 'pts_reb' in derived_metrics:
-            raw_derived_sort_map['pts_reb'] = col_ref.pts + col_ref.reb
-        if 'pts_ast' in derived_metrics:
-            raw_derived_sort_map['pts_ast'] = col_ref.pts + col_ref.ast
-        if 'pra' in derived_metrics:
-            raw_derived_sort_map['pra'] = col_ref.pts + col_ref.reb + col_ref.ast
-        if 'reb_ast' in derived_metrics:
-            raw_derived_sort_map['reb_ast'] = col_ref.reb + col_ref.ast
-        if 'stl_blk' in derived_metrics:
-            raw_derived_sort_map['stl_blk'] = col_ref.stl + col_ref.blk
-        if 'fantasy_score' in derived_metrics:
-            raw_derived_sort_map['fantasy_score'] = (
-                1.0 * col_ref.pts +
-                1.2 * col_ref.reb +
-                1.5 * col_ref.ast +
-                3.0 * col_ref.stl +
-                3.0 * col_ref.blk -
-                1.0 * col_ref.tov
-            )
+    if not has_aggs and has_derived:
         sortable_columns.update(raw_derived_sort_map)
     else:
         sortable_columns.update(derived_metric_map)

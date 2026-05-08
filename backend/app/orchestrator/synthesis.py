@@ -2,9 +2,13 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from typing import Optional, Dict, Any
 import json
+from pathlib import Path
 from app.utils.retry import retry_with_context, format_retry_context_for_prompt
 
 load_dotenv()
+
+PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "synthesis-prompt.txt"
+SYNTHESIS_PROMPT = PROMPT_PATH.read_text()
 
 @retry_with_context(max_attempts=3)
 def synthesize_output(
@@ -29,8 +33,7 @@ def synthesize_output(
     Returns:
         Synthesized answer dict
     """
-    with open('app/orchestrator/prompts/synthesis-prompt.txt') as f:
-        prompt = f.read()
+    prompt = SYNTHESIS_PROMPT
     
     # Add retry context if this is a retry attempt
     if retry_context:

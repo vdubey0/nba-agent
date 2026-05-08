@@ -50,6 +50,7 @@ const AnalyticsDashboard = () => {
   const [savingReview, setSavingReview] = useState(false);
   const [reviewAllProgress, setReviewAllProgress] = useState(null);
   const [selectedCluster, setSelectedCluster] = useState(null);
+  const [selectedError, setSelectedError] = useState(null);
   const [showLatencyDetails, setShowLatencyDetails] = useState(false);
   const appliedReviewIdsRef = useRef(new Set());
   const appliedReviewEventsRef = useRef(new Map());
@@ -438,7 +439,7 @@ const AnalyticsDashboard = () => {
               {(accuracy?.review_queue || []).map((event) => (
                 <div key={event.id} className={attentionQuestionCardClass}>
                   <div className="flex items-center justify-between gap-3">
-                    <span className={attentionOutcomePillClass}>
+                    <span className={`${outcomeClassName(event.outcome)} text-xs`}>
                       {event.outcome}
                     </span>
                     <span className="text-xs text-slate-500">{formatMs(event.latency_ms)}</span>
@@ -496,7 +497,19 @@ const AnalyticsDashboard = () => {
             <ScrollArea>
               <div className="space-y-3">
                 {(accuracy?.errors || []).map((event) => (
-                  <div key={event.id} className={attentionQuestionCardClass}>
+                  <div
+                    key={event.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedError(event)}
+                    onKeyDown={(keyboardEvent) => {
+                      if (keyboardEvent.key === 'Enter' || keyboardEvent.key === ' ') {
+                        keyboardEvent.preventDefault();
+                        setSelectedError(event);
+                      }
+                    }}
+                    className={`${attentionQuestionCardClass} block w-full text-left transition hover:border-red-200 hover:bg-red-50/40 focus:outline-none focus:ring-2 focus:ring-red-200`}
+                  >
                     <div className="flex items-center justify-between gap-3">
                       <span className={attentionOutcomePillClass}>
                         {event.outcome}
@@ -509,6 +522,9 @@ const AnalyticsDashboard = () => {
                     {event.bot_response_preview && (
                       <MarkdownAnswer compact>{event.bot_response_preview}</MarkdownAnswer>
                     )}
+                    <p className="mt-3 text-xs font-semibold text-red-700">
+                      {event.error_message ? 'View error reason' : 'View details'}
+                    </p>
                   </div>
                 ))}
                 {(accuracy?.errors || []).length === 0 && <Empty />}
@@ -574,6 +590,12 @@ const AnalyticsDashboard = () => {
           onClose={() => setSelectedCluster(null)}
         />
       )}
+      {selectedError && (
+        <ErrorDetailModal
+          event={selectedError}
+          onClose={() => setSelectedError(null)}
+        />
+      )}
       {showLatencyDetails && (
         <LatencyDetailsModal
           distribution={latencyDistribution}
@@ -615,6 +637,56 @@ const Empty = () => (
 );
 
 const HUMAN_REVIEW_OUTCOMES = ['correct', 'incorrect'];
+
+const ErrorDetailModal = ({ event, onClose }) => (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6">
+    <div className="max-h-full w-full max-w-3xl overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl">
+      <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-950">Error Details</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            {event.created_at ? new Date(event.created_at).toLocaleString() : 'Unknown time'}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+        >
+          Close
+        </button>
+      </div>
+
+      <div className="space-y-5 p-5">
+        <div className="flex flex-wrap gap-2 text-xs">
+          <span className={attentionOutcomePillClass}>{event.outcome || 'error'}</span>
+          <span className="rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-700">{event.source || 'unknown source'}</span>
+          {event.error_type && (
+            <span className="rounded-full bg-red-50 px-2 py-1 font-medium text-red-700">{event.error_type}</span>
+          )}
+          <span className="rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-700">{formatMs(event.latency_ms)}</span>
+        </div>
+
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Question</p>
+          <p className="mt-2 text-sm font-medium text-slate-900">{event.user_message}</p>
+        </div>
+
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Reason</p>
+          <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border border-red-100 bg-red-50 p-4 text-sm leading-6 text-red-900">{event.error_message || 'No error message was captured for this event.'}</pre>
+        </div>
+
+        {event.bot_response_preview && (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Response Preview</p>
+            <MarkdownAnswer>{event.bot_response_preview}</MarkdownAnswer>
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+);
 
 const LatencyDetailsModal = ({ distribution, days, source, onClose }) => {
   const sourceLabel = SOURCES.find((item) => item.value === source)?.label || source || 'All sources';

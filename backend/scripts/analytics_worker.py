@@ -45,7 +45,7 @@ def process_pending_jobs(limit: int) -> int:
 
             try:
                 event = session.query(ChatQueryEvent).filter(ChatQueryEvent.id == job.query_event_id).one()
-                process_event(session, event)
+                process_event(session, event, allow_llm_claim_extraction=False)
                 job.status = "completed"
                 job.completed_at = datetime.utcnow()
                 job.last_error = None

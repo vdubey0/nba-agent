@@ -8,6 +8,7 @@ Conversational chat flow with support for:
 
 from typing import Any, Dict, Optional
 import logging
+import re
 
 from openai import OpenAI
 
@@ -112,6 +113,15 @@ def _run_answer_pipeline(
     conversation: Optional[Conversation],
 ) -> Dict[str, Any]:
     logger.info("Starting QA pipeline for question: %s", message)
+
+    unsupported_message = _unsupported_capability_message(message)
+    if unsupported_message:
+        logger.info("Unsupported question capability detected: %s", unsupported_message)
+        return _build_success_result_without_query(
+            response_text=unsupported_message,
+            conversation=conversation,
+            outcome_hint="unsupported",
+        )
 
     mentions = extract_entity_mentions(
         client=client,
@@ -258,6 +268,56 @@ def _run_answer_pipeline(
             "execution_metadata": {
                 "step_count": len(plan.get("steps", [])),
                 "result_row_count": len(final_rows),
+            },
+        },
+    }
+
+
+def _unsupported_capability_message(message: str) -> str | None:
+    normalized = message.lower()
+    if re.search(r"\bbench\b|\bsecond unit\b|\breserve production\b|\breserves\b", normalized):
+        return (
+            "I can't answer bench-production questions from the current database because player game rows "
+            "do not store starter, bench, or lineup role information. I can answer team totals, player totals, "
+            "and player/team splits that are present in the stored box-score data."
+        )
+    return None
+
+
+def _build_success_result_without_query(
+    response_text: str,
+    conversation: Optional[Conversation],
+    outcome_hint: str,
+) -> Dict[str, Any]:
+    if conversation:
+        conversation.add_message(role="assistant", content=response_text)
+
+    return {
+        "status": "success",
+        "response": response_text,
+        "clarification": None,
+        "intermediate_steps": None,
+        "error": None,
+        "resolved_entities": [],
+        "plan": None,
+        "execution_metadata": {
+            "step_count": 0,
+            "result_row_count": 0,
+        },
+        "_analytics": {
+            "outcome_hint": outcome_hint,
+            "entities": [],
+            "plan": None,
+            "execution_result": {
+                "status": "skipped",
+                "message": response_text,
+                "step_outputs": {},
+                "final_output": [],
+                "final_output_truncated": False,
+            },
+            "execution_metadata": {
+                "step_count": 0,
+                "result_row_count": 0,
             },
         },
     }

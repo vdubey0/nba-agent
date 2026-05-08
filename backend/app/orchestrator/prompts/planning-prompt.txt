@@ -346,14 +346,15 @@ Multiple aggregations for the same raw field are allowed by using a list:
 }
 
 Common fields:
-Player: pts, reb, ast, stl, blk, tov, fgm, fga, fg3m, fg3a, ftm, fta, oreb, dreb, minutes, fouls, plus_minus, game_id
-Team: pf, pa, reb, ast, stl, blk, tov, fgm, fga, fg3m, fg3a, ftm, fta, oreb, dreb, game_id
+Player: pts, reb, ast, stl, blk, tov, fgm, fga, fg3m, fg3a, ftm, fta, oreb, dreb, minutes, fouls, plus_minus, point_differential, game_id
+Team: pf, pa, reb, ast, stl, blk, tov, fgm, fga, fg3m, fg3a, ftm, fta, oreb, dreb, point_differential, game_id
 Composite: stl_blk
 
 Important:
 - use "pts" for player points
 - use "pf" for team points-for
 - do not use "pts" in team_game_stats queries
+- do not invent bench fields such as bench_pts, bench_reb, bench_ast, or bench_pts_mean. The database does not contain starter/bench role data.
 - use "stddev" when the user asks for standard deviation, variability, volatility, or consistency of a stat across games
 - when the user asks for a grouped leaderboard among players/teams who meet an aggregate threshold, use the corresponding aggregate threshold filter and include that stat aggregation
 - aggregate threshold filter shape is "min_<field>_<agg>", "max_<field>_<agg>", "gt_<field>_<agg>", or "lt_<field>_<agg>"; for steals + blocks per game, use "gt_stl_blk_mean" for "more than" or "min_stl_blk_mean" for "at least", and include "stl_blk": "mean" in aggregations
@@ -486,6 +487,8 @@ Rules:
 - for player queries, TS% uses pts
 - for team queries, TS% and ratings use pf/pa
 - advanced metrics require specific stat combinations (see below)
+- for single-game leaderboards or outlier game rows using game_score, PRA, fantasy_score, or stocks, do NOT use aggregations or group_by; request raw player_game_stats rows with derived_metrics and sort by the derived metric or raw stat.
+- for season-level average game_score leaderboards, include game_id count plus the listed component aggregations.
 
 Recommended components for common derived metrics:
 

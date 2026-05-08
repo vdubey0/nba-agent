@@ -2,12 +2,16 @@ from openai import OpenAI
 import json
 import pprint
 from typing import Optional, Dict, Any
+from pathlib import Path
 from dotenv import load_dotenv
 from app.orchestrator.entity_extraction import extract_entity_mentions, resolve_entity_mentions
 from app.db import SessionLocal
 from app.utils.retry import retry_with_context, format_retry_context_for_prompt
 
 load_dotenv()
+
+PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "planning-prompt.txt"
+PLANNING_PROMPT = PROMPT_PATH.read_text()
 
 
 @retry_with_context(max_attempts=3)
@@ -29,8 +33,7 @@ def plan_question(
     Returns:
         Query plan dict or error dict
     """
-    with open('app/orchestrator/prompts/planning-prompt.txt') as f:
-        prompt = f.read()
+    prompt = PLANNING_PROMPT
     
     # Add retry context if this is a retry attempt
     if retry_context:
