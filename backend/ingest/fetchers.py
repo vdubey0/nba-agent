@@ -1,8 +1,12 @@
 from nba_api.stats.endpoints import scoreboardv3
 from nba_api.stats.endpoints import boxscoretraditionalv3
 from nba_api.stats.endpoints import boxscoresummaryv3
+import os
 import pandas as pd
 import pprint
+
+
+NBA_API_TIMEOUT_SECONDS = int(os.getenv("NBA_API_TIMEOUT_SECONDS", "90"))
 
 def get_season_info_from_game_id(game_id: str) -> dict:
     season_year = int(game_id[3:5])
@@ -30,7 +34,10 @@ def get_season_info_from_game_id(game_id: str) -> dict:
     }
 
 def get_games_for_date(game_date: str) -> list[dict]:
-    games = scoreboardv3.ScoreboardV3(game_date=game_date)
+    games = scoreboardv3.ScoreboardV3(
+        game_date=game_date,
+        timeout=NBA_API_TIMEOUT_SECONDS,
+    )
     df =  games.line_score.get_data_frame()
     gameIds = list(df.gameId.unique())
 
@@ -55,8 +62,14 @@ def get_games_for_date(game_date: str) -> list[dict]:
     return out
 
 def get_boxscore_for_game(game_id: str) -> dict:
-    boxscore = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id)
-    game = boxscoresummaryv3.BoxScoreSummaryV3(game_id=game_id)
+    boxscore = boxscoretraditionalv3.BoxScoreTraditionalV3(
+        game_id=game_id,
+        timeout=NBA_API_TIMEOUT_SECONDS,
+    )
+    game = boxscoresummaryv3.BoxScoreSummaryV3(
+        game_id=game_id,
+        timeout=NBA_API_TIMEOUT_SECONDS,
+    )
 
     df_player = boxscore.player_stats.get_data_frame()
     df_team = boxscore.team_stats.get_data_frame()

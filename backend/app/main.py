@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, Optional
@@ -9,8 +10,16 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from app.analytics.routes import router as analytics_router
+from app.analytics.worker import run_analytics_worker_loop
 from app.chat_service import run_tracked_chat_message
-from app.config import APP_ENV, APP_VERSION, AUTO_CREATE_TABLES, CORS_ORIGINS, OPENAI_API_KEY
+from app.config import (
+    ANALYTICS_BACKGROUND_WORKER_ENABLED,
+    APP_ENV,
+    APP_VERSION,
+    AUTO_CREATE_TABLES,
+    CORS_ORIGINS,
+    OPENAI_API_KEY,
+)
 from app.db import SessionLocal, engine
 from app.orchestrator.entity_extraction import extract_entity_mentions, resolve_entity_mentions
 from app.schema import ensure_tables_if_enabled
@@ -29,7 +38,28 @@ async def lifespan(_: FastAPI):
         ensure_tables_if_enabled()
     else:
         logger.info("AUTO_CREATE_TABLES disabled, skipping automatic schema creation")
-    yield
+
+    analytics_stop_event: asyncio.Event | None = None
+    analytics_worker_task: asyncio.Task | None = None
+    if ANALYTICS_BACKGROUND_WORKER_ENABLED:
+        analytics_stop_event = asyncio.Event()
+        analytics_worker_task = asyncio.create_task(run_analytics_worker_loop(analytics_stop_event))
+        logger.info("Analytics background worker started")
+
+    try:
+        yield
+    finally:
+        if analytics_stop_event and analytics_worker_task:
+            analytics_stop_event.set()
+            try:
+                await asyncio.wait_for(analytics_worker_task, timeout=5)
+            except asyncio.TimeoutError:
+                analytics_worker_task.cancel()
+                try:
+                    await analytics_worker_task
+                except asyncio.CancelledError:
+                    pass
+            logger.info("Analytics background worker stopped")
 
 
 app = FastAPI(lifespan=lifespan)

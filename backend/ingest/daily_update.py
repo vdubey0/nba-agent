@@ -1,7 +1,7 @@
 import logging
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from app.db import engine
 from app.schema import ensure_tables_if_enabled
@@ -34,7 +34,7 @@ def _parse_positive_int(name: str, default: int) -> int:
 
 
 def run_daily_update() -> int:
-    today = datetime.utcnow().date()
+    today = datetime.now(UTC).date()
     lag_days = _parse_positive_int("DAILY_UPDATE_LAG_DAYS", 1)
     lookback_days = _parse_positive_int("DAILY_UPDATE_LOOKBACK_DAYS", 2)
     target_dates = [
@@ -90,7 +90,7 @@ def run_daily_update() -> int:
 
 
 def main() -> int:
-    logger.info("Daily update job started at %s", datetime.utcnow().isoformat())
+    logger.info("Daily update job started at %s", datetime.now(UTC).isoformat())
 
     try:
         ensure_tables_if_enabled()
