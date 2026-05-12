@@ -20,6 +20,7 @@ from app.orchestrator.entity_extraction import (
     extract_entity_mentions,
     resolve_entity_mentions,
 )
+from app.orchestrator.llm_usage import start_usage_tracking, usage_summary
 from app.orchestrator.planning import plan_question, validate_plan
 from app.orchestrator.synthesis import synthesize_output
 from app.utils.clarification import (
@@ -29,6 +30,14 @@ from app.utils.clarification import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _with_llm_usage(result: Dict[str, Any]) -> Dict[str, Any]:
+    summary = usage_summary()
+    analytics = result.setdefault("_analytics", {})
+    analytics["llm_usage"] = summary
+    result["llm_usage"] = summary
+    return result
 
 
 def answer_question(
@@ -113,14 +122,17 @@ def _run_answer_pipeline(
     conversation: Optional[Conversation],
 ) -> Dict[str, Any]:
     logger.info("Starting QA pipeline for question: %s", message)
+    start_usage_tracking()
 
     unsupported_message = _unsupported_capability_message(message)
     if unsupported_message:
         logger.info("Unsupported question capability detected: %s", unsupported_message)
-        return _build_success_result_without_query(
-            response_text=unsupported_message,
-            conversation=conversation,
-            outcome_hint="unsupported",
+        return _with_llm_usage(
+            _build_success_result_without_query(
+                response_text=unsupported_message,
+                conversation=conversation,
+                outcome_hint="unsupported",
+            )
         )
 
     mentions = extract_entity_mentions(
@@ -131,11 +143,13 @@ def _run_answer_pipeline(
 
     if isinstance(mentions, dict) and mentions.get("status") == "failed":
         logger.error("Entity extraction failed")
-        return _build_error_result(
-            message_text=f"Failed to extract entities: {mentions.get('error')}",
-            details=mentions.get("error"),
-            retry_count=mentions.get("retry_count", 0),
-            conversation=conversation,
+        return _with_llm_usage(
+            _build_error_result(
+                message_text=f"Failed to extract entities: {mentions.get('error')}",
+                details=mentions.get("error"),
+                retry_count=mentions.get("retry_count", 0),
+                conversation=conversation,
+            )
         )
 
     logger.info("Resolving %s entity mentions", len(mentions))
@@ -148,27 +162,33 @@ def _run_answer_pipeline(
     failed_entities = [entity for entity in entities if entity.get("status") == "failed"]
     if failed_entities:
         logger.error("Entity resolution failed")
-        return _build_error_result(
-            message_text="Failed to resolve one or more entities.",
-            details=failed_entities,
-            conversation=conversation,
+        return _with_llm_usage(
+            _build_error_result(
+                message_text="Failed to resolve one or more entities.",
+                details=failed_entities,
+                conversation=conversation,
+            )
         )
 
     ambiguous_entities = [entity for entity in entities if entity.get("status") == "ambiguous"]
     if ambiguous_entities:
         logger.info("Ambiguous entity detected for question: %s", message)
-        return _build_clarification_result(
-            ambiguous_entity=ambiguous_entities[0],
-            conversation=conversation,
+        return _with_llm_usage(
+            _build_clarification_result(
+                ambiguous_entity=ambiguous_entities[0],
+                conversation=conversation,
+            )
         )
 
     unresolved = [entity for entity in entities if entity.get("status") == "not_found"]
     if unresolved:
         logger.info("Unresolved entities detected for question: %s", message)
-        return _build_error_result(
-            message_text=f"Could not find: {', '.join(entity['surface_text'] for entity in unresolved)}",
-            details={"unresolved_entities": unresolved},
-            conversation=conversation,
+        return _with_llm_usage(
+            _build_error_result(
+                message_text=f"Could not find: {', '.join(entity['surface_text'] for entity in unresolved)}",
+                details={"unresolved_entities": unresolved},
+                conversation=conversation,
+            )
         )
 
     logger.info("Planning query")
@@ -180,30 +200,36 @@ def _run_answer_pipeline(
 
     if isinstance(plan, dict) and plan.get("status") == "failed":
         logger.error("Planning failed")
-        return _build_error_result(
-            message_text=f"Failed to create query plan: {plan.get('error')}",
-            details=plan.get("error"),
-            retry_count=plan.get("retry_count", 0),
-            conversation=conversation,
+        return _with_llm_usage(
+            _build_error_result(
+                message_text=f"Failed to create query plan: {plan.get('error')}",
+                details=plan.get("error"),
+                retry_count=plan.get("retry_count", 0),
+                conversation=conversation,
+            )
         )
 
     validation = validate_plan(plan)
     if validation.get("status") == "failed":
         logger.error("Plan validation failed")
-        return _build_error_result(
-            message_text=f"Invalid query plan: {validation.get('errors')}",
-            details=validation.get("errors"),
-            conversation=conversation,
+        return _with_llm_usage(
+            _build_error_result(
+                message_text=f"Invalid query plan: {validation.get('errors')}",
+                details=validation.get("errors"),
+                conversation=conversation,
+            )
         )
 
     logger.info("Executing query plan")
     execution_result = execute_plan(session=session, plan=plan)
     if execution_result.get("status") == "failed":
         logger.error("Query execution failed")
-        return _build_error_result(
-            message_text=f"Query execution failed: {execution_result.get('message')}",
-            details=execution_result.get("message"),
-            conversation=conversation,
+        return _with_llm_usage(
+            _build_error_result(
+                message_text=f"Query execution failed: {execution_result.get('message')}",
+                details=execution_result.get("message"),
+                conversation=conversation,
+            )
         )
 
     logger.info("Synthesizing answer")
@@ -217,11 +243,13 @@ def _run_answer_pipeline(
 
     if isinstance(answer, dict) and answer.get("status") == "failed":
         logger.error("Synthesis failed")
-        return _build_error_result(
-            message_text=f"Failed to synthesize answer: {answer.get('error')}",
-            details=answer.get("error"),
-            retry_count=answer.get("retry_count", 0),
-            conversation=conversation,
+        return _with_llm_usage(
+            _build_error_result(
+                message_text=f"Failed to synthesize answer: {answer.get('error')}",
+                details=answer.get("error"),
+                retry_count=answer.get("retry_count", 0),
+                conversation=conversation,
+            )
         )
 
     answer_text = answer.get("output", "No answer generated")
@@ -242,7 +270,7 @@ def _run_answer_pipeline(
             intermediate_steps=intermediate_steps,
         )
 
-    return {
+    return _with_llm_usage({
         "status": "success",
         "response": answer_text,
         "clarification": None,
@@ -270,7 +298,7 @@ def _run_answer_pipeline(
                 "result_row_count": len(final_rows),
             },
         },
-    }
+    })
 
 
 def _unsupported_capability_message(message: str) -> str | None:

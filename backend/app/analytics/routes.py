@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -62,8 +62,38 @@ def _date_window(days: int) -> datetime:
     return datetime.utcnow() - timedelta(days=days)
 
 
-def _base_events(session: Session, days: int, source: str | None = None):
-    query = session.query(ChatQueryEvent).filter(ChatQueryEvent.created_at >= _date_window(days))
+def _parse_datetime_bound(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _today_window(date_from: str | None = None, date_to: str | None = None) -> tuple[datetime, datetime]:
+    requested_start = _parse_datetime_bound(date_from)
+    requested_end = _parse_datetime_bound(date_to)
+    if requested_start and requested_end and requested_start < requested_end:
+        return requested_start, requested_end
+    start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, start + timedelta(days=1)
+
+
+def _base_events(
+    session: Session,
+    days: int,
+    source: str | None = None,
+    period: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+):
+    query = session.query(ChatQueryEvent)
+    if period == "today":
+        start, end = _today_window(date_from, date_to)
+        query = query.filter(ChatQueryEvent.created_at >= start, ChatQueryEvent.created_at < end)
+    else:
+        query = query.filter(ChatQueryEvent.created_at >= _date_window(days))
     if source == "query_family":
         query = query.filter(ChatQueryEvent.source.in_(["api_query", "seed_api_query", "debug_api_query"]))
     elif source == "local_family":
@@ -88,8 +118,15 @@ def _openai_quota_error_clause():
     )
 
 
-def _dashboard_events(session: Session, days: int, source: str | None = None):
-    return _base_events(session, days, source).filter(not_(_openai_quota_error_clause()))
+def _dashboard_events(
+    session: Session,
+    days: int,
+    source: str | None = None,
+    period: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+):
+    return _base_events(session, days, source, period, date_from, date_to).filter(not_(_openai_quota_error_clause()))
 
 
 def _hour_bucket(value: datetime | None) -> str:
@@ -150,11 +187,16 @@ def _finalize_cluster_rollup(item: dict[str, Any]) -> dict[str, Any]:
 def analytics_summary(
     days: int = Query(30, ge=1, le=365),
     source: str | None = None,
+    period: str | None = Query(None, pattern="^(rolling|today)$"),
+    date_from: str | None = None,
+    date_to: str | None = None,
     session: Session = Depends(get_session),
 ):
-    events = _dashboard_events(session, days, source)
+    events = _dashboard_events(session, days, source, period, date_from, date_to)
     total = events.count()
     avg_latency = events.with_entities(func.avg(ChatQueryEvent.latency_ms)).scalar() or 0
+    total_cost = events.with_entities(func.sum(ChatQueryEvent.estimated_cost)).scalar() or 0
+    avg_cost = events.with_entities(func.avg(ChatQueryEvent.estimated_cost)).scalar() or 0
     error_count = (
         events.join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id, isouter=True)
         .filter(
@@ -181,6 +223,8 @@ def analytics_summary(
     return {
         "total_queries": total,
         "average_latency_ms": round(float(avg_latency), 2),
+        "estimated_total_cost": round(float(total_cost), 6),
+        "estimated_average_cost": round(float(avg_cost), 6),
         "error_rate": round(error_count / total, 4) if total else 0,
         "objective_accuracy_rate": round(correct_count / verifiable_count, 4) if verifiable_count else 0,
         "verifiable_count": verifiable_count,
@@ -192,10 +236,13 @@ def analytics_summary(
 def analytics_latency_distribution(
     days: int = Query(30, ge=1, le=365),
     source: str | None = None,
+    period: str | None = Query(None, pattern="^(rolling|today)$"),
+    date_from: str | None = None,
+    date_to: str | None = None,
     session: Session = Depends(get_session),
 ):
     rows = (
-        _dashboard_events(session, days, source)
+        _dashboard_events(session, days, source, period, date_from, date_to)
         .join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id, isouter=True)
         .filter(ChatQueryEvent.latency_ms.isnot(None))
         .filter(ChatQueryEvent.error_type.is_(None))
@@ -219,13 +266,49 @@ def analytics_latency_distribution(
     }
 
 
+@router.get("/cost-distribution")
+def analytics_cost_distribution(
+    days: int = Query(30, ge=1, le=365),
+    source: str | None = None,
+    period: str | None = Query(None, pattern="^(rolling|today)$"),
+    date_from: str | None = None,
+    date_to: str | None = None,
+    session: Session = Depends(get_session),
+):
+    rows = (
+        _dashboard_events(session, days, source, period, date_from, date_to)
+        .filter(ChatQueryEvent.estimated_cost.isnot(None))
+        .with_entities(ChatQueryEvent.estimated_cost)
+        .all()
+    )
+    values = sorted(float(row[0]) for row in rows if row[0] is not None)
+    percentiles = {
+        "p25": _percentile(values, 0.25),
+        "p50": _percentile(values, 0.50),
+        "p75": _percentile(values, 0.75),
+        "p95": _percentile(values, 0.95),
+        "p99": _percentile(values, 0.99),
+    }
+    return {
+        "count": len(values),
+        "min_cost": round(values[0], 8) if values else 0,
+        "max_cost": round(values[-1], 8) if values else 0,
+        "total_cost": round(sum(values), 8),
+        "avg_cost": round(sum(values) / len(values), 8) if values else 0,
+        **{key: round(value, 8) for key, value in percentiles.items()},
+    }
+
+
 @router.get("/performance")
 def analytics_performance(
     days: int = Query(30, ge=1, le=365),
     source: str | None = None,
+    period: str | None = Query(None, pattern="^(rolling|today)$"),
+    date_from: str | None = None,
+    date_to: str | None = None,
     session: Session = Depends(get_session),
 ):
-    events = _dashboard_events(session, days, source)
+    events = _dashboard_events(session, days, source, period, date_from, date_to)
     by_day = (
         events.with_entities(
             func.date(ChatQueryEvent.created_at).label("day"),
@@ -277,9 +360,12 @@ def analytics_performance(
 def analytics_accuracy(
     days: int = Query(30, ge=1, le=365),
     source: str | None = None,
+    period: str | None = Query(None, pattern="^(rolling|today)$"),
+    date_from: str | None = None,
+    date_to: str | None = None,
     session: Session = Depends(get_session),
 ):
-    events = _dashboard_events(session, days, source).subquery()
+    events = _dashboard_events(session, days, source, period, date_from, date_to).subquery()
     outcome_rows = (
         session.query(ChatQueryEvent, ChatEvaluation)
         .join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id)
@@ -370,11 +456,20 @@ def analytics_accuracy(
 def analytics_questions(
     days: int = Query(30, ge=1, le=365),
     source: str | None = None,
+    period: str | None = Query(None, pattern="^(rolling|today)$"),
+    date_from: str | None = None,
+    date_to: str | None = None,
     session: Session = Depends(get_session),
 ):
-    events = _dashboard_events(session, days, source).subquery()
+    events = _dashboard_events(session, days, source, period, date_from, date_to).subquery()
     intents = (
-        session.query(ChatQuestionAnalysis.intent_category, func.count(ChatQuestionAnalysis.id), func.avg(ChatQueryEvent.latency_ms))
+        session.query(
+            ChatQuestionAnalysis.intent_category,
+            func.count(ChatQuestionAnalysis.id),
+            func.avg(ChatQueryEvent.latency_ms),
+            func.sum(ChatQueryEvent.estimated_cost),
+            func.avg(ChatQueryEvent.estimated_cost),
+        )
         .join(events, events.c.id == ChatQuestionAnalysis.query_event_id)
         .join(ChatQueryEvent, ChatQueryEvent.id == ChatQuestionAnalysis.query_event_id)
         .group_by(ChatQuestionAnalysis.intent_category)
@@ -382,7 +477,13 @@ def analytics_questions(
         .all()
     )
     complexity = (
-        session.query(ChatQuestionAnalysis.complexity_type, func.count(ChatQuestionAnalysis.id), func.avg(ChatQueryEvent.latency_ms))
+        session.query(
+            ChatQuestionAnalysis.complexity_type,
+            func.count(ChatQuestionAnalysis.id),
+            func.avg(ChatQueryEvent.latency_ms),
+            func.sum(ChatQueryEvent.estimated_cost),
+            func.avg(ChatQueryEvent.estimated_cost),
+        )
         .join(events, events.c.id == ChatQuestionAnalysis.query_event_id)
         .join(ChatQueryEvent, ChatQueryEvent.id == ChatQuestionAnalysis.query_event_id)
         .group_by(ChatQuestionAnalysis.complexity_type)
@@ -430,6 +531,8 @@ def analytics_questions(
                 "source": source_label,
                 "outcome": outcome,
                 "latency_ms": round(float(event.latency_ms or 0), 2),
+                "estimated_cost": round(float(event.estimated_cost or 0), 6) if event.estimated_cost is not None else None,
+                "total_tokens": event.total_tokens,
             }
         )
 
@@ -438,15 +541,32 @@ def analytics_questions(
         key=lambda item: item["query_count"],
         reverse=True,
     )[:20]
-    recent = _dashboard_events(session, days, source).order_by(ChatQueryEvent.created_at.desc()).limit(50).all()
+    recent = (
+        _dashboard_events(session, days, source, period, date_from, date_to)
+        .order_by(ChatQueryEvent.created_at.desc())
+        .limit(50)
+        .all()
+    )
     return {
         "intents": [
-            {"intent": intent or "unknown", "query_count": count, "avg_latency_ms": round(float(avg or 0), 2)}
-            for intent, count, avg in intents
+            {
+                "intent": intent or "unknown",
+                "query_count": count,
+                "avg_latency_ms": round(float(avg_latency or 0), 2),
+                "total_cost": round(float(total_cost or 0), 6),
+                "avg_cost": round(float(avg_cost or 0), 6),
+            }
+            for intent, count, avg_latency, total_cost, avg_cost in intents
         ],
         "complexity": [
-            {"complexity": item or "unknown", "query_count": count, "avg_latency_ms": round(float(avg or 0), 2)}
-            for item, count, avg in complexity
+            {
+                "complexity": item or "unknown",
+                "query_count": count,
+                "avg_latency_ms": round(float(avg_latency or 0), 2),
+                "total_cost": round(float(total_cost or 0), 6),
+                "avg_cost": round(float(avg_cost or 0), 6),
+            }
+            for item, count, avg_latency, total_cost, avg_cost in complexity
         ],
         "clusters": clusters,
         "recent_events": [_event_summary(event) for event in recent],
@@ -457,12 +577,15 @@ def analytics_questions(
 def analytics_events(
     days: int = Query(30, ge=1, le=365),
     source: str | None = None,
+    period: str | None = Query(None, pattern="^(rolling|today)$"),
+    date_from: str | None = None,
+    date_to: str | None = None,
     outcome: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     session: Session = Depends(get_session),
 ):
     query = (
-        _dashboard_events(session, days, source)
+        _dashboard_events(session, days, source, period, date_from, date_to)
         .join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id, isouter=True)
         .join(ChatQuestionAnalysis, ChatQuestionAnalysis.query_event_id == ChatQueryEvent.id, isouter=True)
     )
@@ -612,6 +735,11 @@ def _event_summary(event: ChatQueryEvent) -> dict[str, Any]:
         "bot_response_preview": (event.bot_response or "")[:180],
         "chatbot_status": event.chatbot_status,
         "latency_ms": round(float(event.latency_ms or 0), 2),
+        "model_name": event.model_name,
+        "prompt_tokens": event.prompt_tokens,
+        "completion_tokens": event.completion_tokens,
+        "total_tokens": event.total_tokens,
+        "estimated_cost": round(float(event.estimated_cost or 0), 6) if event.estimated_cost is not None else None,
         "plan_type": event.plan_type,
         "step_count": event.step_count,
         "result_row_count": event.result_row_count,

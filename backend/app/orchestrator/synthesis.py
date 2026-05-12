@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 from typing import Optional, Dict, Any
 import json
 from pathlib import Path
+from app.config import SYNTHESIS_MODEL
+from app.orchestrator.llm_usage import record_llm_response
 from app.utils.retry import retry_with_context, format_retry_context_for_prompt
 
 load_dotenv()
@@ -106,7 +108,7 @@ def synthesize_output(
     }
 
     response = client.responses.create(
-        model="gpt-5.4",
+        model=SYNTHESIS_MODEL,
         input=[
             {
                 "role": "system", 
@@ -119,6 +121,7 @@ def synthesize_output(
         ],
         temperature=0.0
     )
+    record_llm_response("synthesis", SYNTHESIS_MODEL, response)
 
     output_text = response.output[0].content[0].text.strip()
     return {

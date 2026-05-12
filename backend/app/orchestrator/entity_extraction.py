@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from app.query.resolvers import TEAM_ALIASES, resolve_player, resolve_team
 from app.db import SessionLocal
 from app.models import Player
+from app.config import ENTITY_EXTRACTION_MODEL
+from app.orchestrator.llm_usage import record_llm_response
 from app.utils.retry import retry_with_context, format_retry_context_for_prompt
 from app.models.conversation import Conversation, ResolvedEntity
 
@@ -273,10 +275,11 @@ def extract_entity_mentions(
     })
 
     response = client.responses.create(
-        model="gpt-5.4",
+        model=ENTITY_EXTRACTION_MODEL,
         input=input_messages,
         temperature=0.0
     )
+    record_llm_response("entity_extraction", ENTITY_EXTRACTION_MODEL, response)
 
     output_text = response.output[0].content[0].text
     try:

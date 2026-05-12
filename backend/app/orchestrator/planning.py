@@ -6,6 +6,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 from app.orchestrator.entity_extraction import extract_entity_mentions, resolve_entity_mentions
 from app.db import SessionLocal
+from app.config import PLANNING_MODEL
+from app.orchestrator.capabilities import capability_context, format_capability_context
+from app.orchestrator.llm_usage import record_llm_response
 from app.utils.retry import retry_with_context, format_retry_context_for_prompt
 
 load_dotenv()
@@ -33,7 +36,8 @@ def plan_question(
     Returns:
         Query plan dict or error dict
     """
-    prompt = PLANNING_PROMPT
+    planner_capability_context = capability_context(question)
+    prompt = PLANNING_PROMPT + format_capability_context(question)
     
     # Add retry context if this is a retry attempt
     if retry_context:
@@ -45,7 +49,7 @@ def plan_question(
     }
 
     response = client.responses.create(
-        model="gpt-5.4",
+        model=PLANNING_MODEL,
         input=[
             {
                 "role": "system",
@@ -58,6 +62,7 @@ def plan_question(
         ],
         temperature=0.0
     )
+    record_llm_response("planning", PLANNING_MODEL, response)
 
     output_text = response.output[0].content[0].text.strip()
     try:
@@ -78,6 +83,10 @@ def plan_question(
             'raw_text': output_text
         }
     
+    if isinstance(plan, dict):
+        plan.setdefault("metadata", {})
+        plan["metadata"]["planner_capability_context"] = planner_capability_context
+
     return plan
 
 VALID_PLAN_TYPES = {

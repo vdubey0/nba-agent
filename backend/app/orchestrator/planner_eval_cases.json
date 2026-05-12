@@ -1,0 +1,86 @@
+[
+  {
+    "id": "single_query_team_turnovers_forced",
+    "family": "single_query",
+    "question": "Which teams force the most turnovers?",
+    "expected": {
+      "plan_type": "single_query",
+      "min_steps": 1,
+      "max_steps": 1,
+      "required_step_types": ["query"]
+    }
+  },
+  {
+    "id": "multi_leaderboard_vs_team",
+    "family": "multi_leaderboard",
+    "question": "Who scores, rebounds, and assists the most against the Warriors?",
+    "expected": {
+      "plan_type": "multi_leaderboard",
+      "min_steps": 3,
+      "required_step_types": ["query"]
+    }
+  },
+  {
+    "id": "derived_cohort_player_vs_top_turnover_teams",
+    "family": "derived_cohort",
+    "question": "How does Steph Curry play against the 10 teams that force the most turnovers?",
+    "expected": {
+      "plan_type": "derived_cohort",
+      "min_steps": 4,
+      "required_step_types": ["query", "extract_ids", "filter_rows"]
+    }
+  },
+  {
+    "id": "team_record_without_player",
+    "family": "record",
+    "question": "What is the Warriors record this season without Steph Curry?",
+    "expected": {
+      "plan_type": "multi_query",
+      "min_steps": 2,
+      "required_step_types": ["query"]
+    }
+  },
+  {
+    "id": "season_high_vs_team",
+    "family": "multi_query",
+    "question": "Which players scored their season high vs the Warriors this season?",
+    "expected": {
+      "plan_type": "multi_query",
+      "min_steps": 2,
+      "required_step_types": ["query"]
+    }
+  },
+  {
+    "id": "last_team_game_all_players",
+    "family": "game_specific",
+    "question": "Who scored the most points in the last Lakers game?",
+    "expected": {
+      "plan_type": "multi_query",
+      "min_steps": 2,
+      "required_step_types": ["query"]
+    }
+  },
+  {
+    "id": "advanced_metric_usage_rate",
+    "family": "advanced_metric",
+    "question": "Which Warriors players have the highest usage rate in the last 10 games?",
+    "expected": {
+      "plan_type": "single_query",
+      "min_steps": 1,
+      "max_steps": 1,
+      "required_step_types": ["query"],
+      "required_derived_metrics": ["usage_rate"]
+    }
+  },
+  {
+    "id": "conditional_player_stats_team_win",
+    "family": "conditional_stats",
+    "question": "In games where the Raptors win by 10 or more points, how much fantasy score does Brandon Ingram average?",
+    "expected": {
+      "plan_type": "single_query",
+      "min_steps": 1,
+      "max_steps": 1,
+      "required_step_types": ["query"]
+    }
+  }
+]

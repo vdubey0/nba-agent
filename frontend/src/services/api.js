@@ -53,37 +53,64 @@ export const healthCheck = async () => {
   }
 };
 
-export const getAnalyticsSummary = async (days = 30, source = '') => {
+const localTodayBounds = () => {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return {
+    date_from: start.toISOString(),
+    date_to: end.toISOString(),
+  };
+};
+
+const analyticsParams = (days, source, period) => {
+  const todayParams = period === 'today' ? localTodayBounds() : {};
+  return {
+    days,
+    source: source || undefined,
+    period: period === 'today' ? 'today' : undefined,
+    ...todayParams,
+  };
+};
+
+export const getAnalyticsSummary = async (days = 30, source = '', period = 'rolling') => {
   const response = await api.get('/admin/api/analytics/summary', {
-    params: { days, source: source || undefined },
+    params: analyticsParams(days, source, period),
   });
   return response.data;
 };
 
-export const getAnalyticsPerformance = async (days = 30, source = '') => {
+export const getAnalyticsPerformance = async (days = 30, source = '', period = 'rolling') => {
   const response = await api.get('/admin/api/analytics/performance', {
-    params: { days, source: source || undefined },
+    params: analyticsParams(days, source, period),
   });
   return response.data;
 };
 
-export const getAnalyticsLatencyDistribution = async (days = 30, source = '') => {
+export const getAnalyticsLatencyDistribution = async (days = 30, source = '', period = 'rolling') => {
   const response = await api.get('/admin/api/analytics/latency-distribution', {
-    params: { days, source: source || undefined },
+    params: analyticsParams(days, source, period),
   });
   return response.data;
 };
 
-export const getAnalyticsAccuracy = async (days = 30, source = '') => {
+export const getAnalyticsCostDistribution = async (days = 30, source = '', period = 'rolling') => {
+  const response = await api.get('/admin/api/analytics/cost-distribution', {
+    params: analyticsParams(days, source, period),
+  });
+  return response.data;
+};
+
+export const getAnalyticsAccuracy = async (days = 30, source = '', period = 'rolling') => {
   const response = await api.get('/admin/api/analytics/accuracy', {
-    params: { days, source: source || undefined },
+    params: analyticsParams(days, source, period),
   });
   return response.data;
 };
 
-export const getAnalyticsQuestions = async (days = 30, source = '') => {
+export const getAnalyticsQuestions = async (days = 30, source = '', period = 'rolling') => {
   const response = await api.get('/admin/api/analytics/questions', {
-    params: { days, source: source || undefined },
+    params: analyticsParams(days, source, period),
   });
   return response.data;
 };

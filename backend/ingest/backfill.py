@@ -287,7 +287,7 @@ if __name__ == "__main__":
     print("STARTING INITIAL BACKFILL")
     print("=" * 80)
     
-    result = backfill_range(start_date="2026-05-04", end_date="2026-05-08")
+    result = backfill_range(start_date="2026-05-08", end_date="2026-05-11")
     
     # Collect dates that failed or partially succeeded
     failed_or_partial_dates = []

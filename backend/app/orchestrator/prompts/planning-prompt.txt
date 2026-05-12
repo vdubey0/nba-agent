@@ -1064,6 +1064,8 @@ Valid output:
   ]
 }
 
+Note: Do NOT include sort or limit in these queries. Return ALL players from both teams. The synthesis step will combine both datasets and identify the player with the highest points from either team in that game.
+
 
 Example 7: Advanced Metrics (Usage Rate)
 
@@ -1075,35 +1077,43 @@ Assume resolved team ID for Warriors is 1610612744.
 Valid output:
 {
   "plan_type": "single_query",
-  "query_spec": {
-    "scope": "player_game_stats",
-    "subject": {"type": "team", "id": 1610612744},
-    "perspective": "self",
-    "filters": {
-      "season": "2025-26",
-      "season_type": ["Regular Season"],
-      "last_n_games": 10
-    },
-    "group_by": ["player_id"],
-    "aggregations": {
-      "fga": "sum",
-      "fta": "sum",
-      "tov": "sum",
-      "minutes": "sum",
-      "game_id": "count"
-    },
-    "derived_metrics": ["usage_rate"],
-    "sort": {
-      "by": "usage_rate",
-      "direction": "desc"
-    },
-    "limit": 10
-  }
+  "steps": [
+    {
+      "step_id": "s1",
+      "step_type": "query",
+      "description": "Find Warriors players with the highest usage rate in the last 10 games",
+      "depends_on": [],
+      "payload": {
+        "query_spec": {
+          "scope": "player_game_stats",
+          "subject": {"type": "team", "id": 1610612744},
+          "perspective": "self",
+          "filters": {
+            "season": "2025-26",
+            "season_type": ["Regular Season"],
+            "last_n_games": 10
+          },
+          "group_by": ["player_id"],
+          "aggregations": {
+            "fga": "sum",
+            "fta": "sum",
+            "tov": "sum",
+            "minutes": "sum",
+            "game_id": "count"
+          },
+          "derived_metrics": ["usage_rate"],
+          "sort": {
+            "by": "usage_rate",
+            "direction": "desc"
+          },
+          "limit": 10
+        }
+      }
+    }
+  ]
 }
 
 Note: When using derived_metrics, include the required component stats in aggregations. For usage_rate, you need: fga, fta, tov, minutes, and game_id count.
-
-Note: Do NOT include sort or limit in these queries. Return ALL players from both teams. The synthesis step will combine both datasets and identify the player with the highest points from either team in that game.
 
 ==================================================
 Example 8: Player Stats When Specific Team Wins

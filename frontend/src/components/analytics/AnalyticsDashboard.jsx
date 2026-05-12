@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import {
   applyAutomaticReview,
   getAnalyticsAccuracy,
+  getAnalyticsCostDistribution,
   getAnalyticsLatencyDistribution,
   getAnalyticsPerformance,
   getAnalyticsQuestions,
@@ -22,6 +23,20 @@ const SOURCES = [
 const formatMs = (value) => `${Math.round(Number(value) || 0).toLocaleString()} ms`;
 const formatPct = (value) => `${Math.round((Number(value) || 0) * 100)}%`;
 const formatNumber = (value) => Math.round(Number(value) || 0).toLocaleString();
+const formatCost = (value) => {
+  if (value === null || value === undefined) return 'No cost data';
+  const cost = Number(value);
+  if (!Number.isFinite(cost)) return 'No cost data';
+  if (cost === 0) return '$0.00';
+  if (cost < 0.01) return `$${cost.toFixed(4)}`;
+  return `$${cost.toFixed(2)}`;
+};
+const formatTokens = (value) => (
+  value === null || value === undefined ? 'tokens unknown' : `${formatNumber(value)} tokens`
+);
+const formatWindowLabel = (days, period = 'rolling') => (
+  period === 'today' ? 'Today' : `Last ${days} days`
+);
 const attentionQuestionCardClass = 'rounded-lg border border-slate-200 bg-white p-3';
 const attentionOutcomePillClass = 'rounded-full bg-red-100 px-2 py-1 text-xs font-medium text-red-700';
 const outcomeClassName = (outcome) => (
@@ -34,12 +49,23 @@ const outcomeClassName = (outcome) => (
         : 'rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-700'
 );
 
+const CostPill = ({ event, compact = false }) => (
+  <span
+    className={`rounded-full bg-emerald-50 px-2 py-1 font-medium text-emerald-700 tabular-nums ${compact ? 'text-xs' : ''}`}
+    title={`${formatCost(event?.estimated_cost)} estimated OpenAI spend, ${formatTokens(event?.total_tokens)}`}
+  >
+    {formatCost(event?.estimated_cost)}
+  </span>
+);
+
 const AnalyticsDashboard = () => {
   const [days, setDays] = useState(30);
+  const [period, setPeriod] = useState('rolling');
   const [source, setSource] = useState('');
   const [summary, setSummary] = useState(null);
   const [performance, setPerformance] = useState(null);
   const [latencyDistribution, setLatencyDistribution] = useState(null);
+  const [costDistribution, setCostDistribution] = useState(null);
   const [accuracy, setAccuracy] = useState(null);
   const [questions, setQuestions] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -52,21 +78,38 @@ const AnalyticsDashboard = () => {
   const [selectedCluster, setSelectedCluster] = useState(null);
   const [selectedError, setSelectedError] = useState(null);
   const [showLatencyDetails, setShowLatencyDetails] = useState(false);
+  const [showCostDetails, setShowCostDetails] = useState(false);
   const appliedReviewIdsRef = useRef(new Set());
   const appliedReviewEventsRef = useRef(new Map());
+  const analyticsRequestIdRef = useRef(0);
 
-  const loadAnalytics = useCallback(async (active = true, { silent = false } = {}) => {
-    if (!silent) setLoading(true);
+  const clearAnalyticsState = useCallback(() => {
+    setSummary(null);
+    setPerformance(null);
+    setLatencyDistribution(null);
+    setCostDistribution(null);
+    setAccuracy(null);
+    setQuestions(null);
+  }, []);
+
+  const loadAnalytics = useCallback(async ({ silent = false } = {}) => {
+    const requestId = analyticsRequestIdRef.current + 1;
+    analyticsRequestIdRef.current = requestId;
+    if (!silent) {
+      setLoading(true);
+      clearAnalyticsState();
+    }
     setError(null);
     try {
-      const [summaryData, performanceData, latencyData, accuracyData, questionsData] = await Promise.all([
-        getAnalyticsSummary(days, source),
-        getAnalyticsPerformance(days, source),
-        getAnalyticsLatencyDistribution(days, source),
-        getAnalyticsAccuracy(days, source),
-        getAnalyticsQuestions(days, source),
+      const [summaryData, performanceData, latencyData, costData, accuracyData, questionsData] = await Promise.all([
+        getAnalyticsSummary(days, source, period),
+        getAnalyticsPerformance(days, source, period),
+        getAnalyticsLatencyDistribution(days, source, period),
+        getAnalyticsCostDistribution(days, source, period),
+        getAnalyticsAccuracy(days, source, period),
+        getAnalyticsQuestions(days, source, period),
       ]);
-      if (!active) return;
+      if (requestId !== analyticsRequestIdRef.current) return;
       const appliedReviewIds = appliedReviewIdsRef.current;
       const appliedReviewEvents = appliedReviewEventsRef.current;
       const filteredAccuracyData = {
@@ -91,28 +134,32 @@ const AnalyticsDashboard = () => {
       setSummary(summaryData);
       setPerformance(performanceData);
       setLatencyDistribution(latencyData);
+      setCostDistribution(costData);
       setAccuracy(filteredAccuracyData);
       setQuestions(filteredQuestionsData);
     } catch (err) {
-      if (active) setError(err.message || 'Failed to load analytics');
+      if (requestId === analyticsRequestIdRef.current) {
+        setError(err.message || 'Failed to load analytics');
+      }
     } finally {
-      if (active && !silent) setLoading(false);
+      if (requestId === analyticsRequestIdRef.current && !silent) {
+        setLoading(false);
+      }
     }
-  }, [days, source]);
+  }, [days, source, period, clearAnalyticsState]);
 
   useEffect(() => {
-    let active = true;
-    loadAnalytics(active);
+    loadAnalytics();
     const refreshTimer = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
-        loadAnalytics(active, { silent: true });
+        loadAnalytics({ silent: true });
       }
     }, 5000);
     return () => {
-      active = false;
+      analyticsRequestIdRef.current += 1;
       window.clearInterval(refreshTimer);
     };
-  }, [days, source, loadAnalytics]);
+  }, [days, source, period, loadAnalytics]);
 
   const outcomeRows = useMemo(() => {
     const outcomes = accuracy?.outcomes || [];
@@ -254,7 +301,7 @@ const AnalyticsDashboard = () => {
   };
 
   const refreshAnalyticsInBackground = () => {
-    loadAnalytics(true).catch((err) => {
+    loadAnalytics().catch((err) => {
       setError(err.message || 'Failed to refresh analytics');
     });
   };
@@ -336,10 +383,18 @@ const AnalyticsDashboard = () => {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <select
-              value={days}
-              onChange={(event) => setDays(Number(event.target.value))}
+              value={period === 'today' ? 'today' : String(days)}
+              onChange={(event) => {
+                if (event.target.value === 'today') {
+                  setPeriod('today');
+                  return;
+                }
+                setPeriod('rolling');
+                setDays(Number(event.target.value));
+              }}
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
             >
+              <option value="today">Today</option>
               <option value={7}>Last 7 days</option>
               <option value={30}>Last 30 days</option>
               <option value={90}>Last 90 days</option>
@@ -367,8 +422,22 @@ const AnalyticsDashboard = () => {
         )}
         {loading && <div className="mb-4 text-sm text-slate-500">Loading analytics...</div>}
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
           <MetricTile label="Queries" value={summary?.total_queries ?? 0} detail="Tracked API, local, and benchmark traffic" />
+          <MetricTile
+            label="Est. spend"
+            value={formatCost(summary?.estimated_total_cost)}
+            detail={`${formatCost(summary?.estimated_average_cost)} avg / question`}
+            action={(
+              <button
+                type="button"
+                onClick={() => setShowCostDetails(true)}
+                className="text-xs font-semibold text-emerald-700 transition hover:text-emerald-900 hover:underline"
+              >
+                See details
+              </button>
+            )}
+          />
           <MetricTile
             label="Avg latency"
             value={formatMs(summary?.average_latency_ms)}
@@ -442,7 +511,10 @@ const AnalyticsDashboard = () => {
                     <span className={`${outcomeClassName(event.outcome)} text-xs`}>
                       {event.outcome}
                     </span>
-                    <span className="text-xs text-slate-500">{formatMs(event.latency_ms)}</span>
+                    <div className="flex items-center gap-2 text-xs text-slate-500">
+                      <CostPill event={event} compact />
+                      <span>{formatMs(event.latency_ms)}</span>
+                    </div>
                   </div>
                   <p className="mt-2 text-sm font-medium text-slate-800">{event.user_message}</p>
                   {event.bot_response_preview && (
@@ -514,9 +586,10 @@ const AnalyticsDashboard = () => {
                       <span className={attentionOutcomePillClass}>
                         {event.outcome}
                       </span>
-                      <span className="text-xs text-slate-500">
-                        {event.created_at ? new Date(event.created_at).toLocaleString() : ''}
-                      </span>
+                      <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-slate-500">
+                        <CostPill event={event} compact />
+                        <span>{event.created_at ? new Date(event.created_at).toLocaleString() : ''}</span>
+                      </div>
                     </div>
                     <p className="mt-2 text-sm font-medium text-slate-800">{event.user_message}</p>
                     {event.bot_response_preview && (
@@ -548,6 +621,7 @@ const AnalyticsDashboard = () => {
                       <span className={outcomeClassName(event.evaluation?.outcome)}>
                         {event.evaluation?.outcome || 'pending outcome'}
                       </span>
+                      <CostPill event={event} compact />
                       <span className="ml-auto tabular-nums">{formatMs(event.latency_ms)}</span>
                     </div>
                     <p className="mt-3 text-sm font-medium text-slate-900">{event.user_message}</p>
@@ -600,8 +674,19 @@ const AnalyticsDashboard = () => {
         <LatencyDetailsModal
           distribution={latencyDistribution}
           days={days}
+          period={period}
           source={source}
           onClose={() => setShowLatencyDetails(false)}
+        />
+      )}
+      {showCostDetails && (
+        <CostDetailsModal
+          distribution={costDistribution}
+          questions={questions}
+          days={days}
+          period={period}
+          source={source}
+          onClose={() => setShowCostDetails(false)}
         />
       )}
     </div>
@@ -664,6 +749,7 @@ const ErrorDetailModal = ({ event, onClose }) => (
           {event.error_type && (
             <span className="rounded-full bg-red-50 px-2 py-1 font-medium text-red-700">{event.error_type}</span>
           )}
+          <CostPill event={event} compact />
           <span className="rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-700">{formatMs(event.latency_ms)}</span>
         </div>
 
@@ -688,8 +774,9 @@ const ErrorDetailModal = ({ event, onClose }) => (
   </div>
 );
 
-const LatencyDetailsModal = ({ distribution, days, source, onClose }) => {
+const LatencyDetailsModal = ({ distribution, days, period, source, onClose }) => {
   const sourceLabel = SOURCES.find((item) => item.value === source)?.label || source || 'All sources';
+  const windowLabel = formatWindowLabel(days, period);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6">
@@ -698,7 +785,7 @@ const LatencyDetailsModal = ({ distribution, days, source, onClose }) => {
           <div>
             <h2 className="text-lg font-semibold text-slate-950">Latency Details</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Last {days} days, {sourceLabel.toLowerCase()}. Error outcomes are excluded.
+              {windowLabel}, {sourceLabel.toLowerCase()}. Error outcomes are excluded.
             </p>
           </div>
           <button
@@ -717,6 +804,56 @@ const LatencyDetailsModal = ({ distribution, days, source, onClose }) => {
             <MetricTile label="P99" value={formatMs(distribution?.p99)} detail="Tail latency" />
           </div>
           <LatencyBoxPlot distribution={distribution} />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const CostDetailsModal = ({ distribution, questions, days, period, source, onClose }) => {
+  const sourceLabel = SOURCES.find((item) => item.value === source)?.label || source || 'All sources';
+  const windowLabel = formatWindowLabel(days, period);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6">
+      <div className="max-h-full w-full max-w-5xl overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-950">Spend Details</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {windowLabel}, {sourceLabel.toLowerCase()}. Estimates use recorded model token usage.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="space-y-5 p-5">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <MetricTile label="Samples" value={formatNumber(distribution?.count)} detail="Events with cost data" />
+            <MetricTile label="Total spend" value={formatCost(distribution?.total_cost)} detail="Selected window" />
+            <MetricTile label="Avg question" value={formatCost(distribution?.avg_cost)} detail="Mean estimated cost" />
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-2">
+            <Panel title="Spend By Type Of Question" subtitle="Total estimated spend grouped by detected intent.">
+              <ScrollArea compact>
+                <BarChart data={questions?.intents || []} labelKey="intent" valueKey="total_cost" valueLabel={formatCost} />
+              </ScrollArea>
+            </Panel>
+            <Panel title="Spend By Complexity" subtitle="Total estimated spend grouped by query complexity.">
+              <ScrollArea compact>
+                <BarChart data={questions?.complexity || []} labelKey="complexity" valueKey="total_cost" valueLabel={formatCost} />
+              </ScrollArea>
+            </Panel>
+          </div>
+
+          <CostBoxPlot distribution={distribution} />
         </div>
       </div>
     </div>
@@ -795,6 +932,82 @@ const LatencyBoxPlot = ({ distribution }) => {
   );
 };
 
+const CostBoxPlot = ({ distribution }) => {
+  const count = Number(distribution?.count) || 0;
+  if (!count) {
+    return (
+      <div className="rounded-lg border border-dashed border-slate-300 p-6 text-sm text-slate-500">
+        No cost samples yet. New tracked questions will populate this once token usage is recorded.
+      </div>
+    );
+  }
+
+  const width = 760;
+  const height = 250;
+  const padding = 52;
+  const plotRight = 560;
+  const axisY = 132;
+  const boxHeight = 46;
+  const min = Number(distribution.min_cost) || 0;
+  const max = Math.max(Number(distribution.max_cost) || 0, min + 0.000001);
+  const scale = (value) => padding + ((Number(value) - min) / (max - min)) * (plotRight - padding);
+  const markers = [
+    { key: 'p25', label: 'P25', value: distribution.p25, y: 58, color: '#059669' },
+    { key: 'p50', label: 'P50', value: distribution.p50, y: 88, color: '#0f172a' },
+    { key: 'p75', label: 'P75', value: distribution.p75, y: 118, color: '#059669' },
+    { key: 'p95', label: 'P95', value: distribution.p95, y: 148, color: '#f59e0b' },
+    { key: 'p99', label: 'P99', value: distribution.p99, y: 178, color: '#dc2626' },
+  ];
+
+  return (
+    <div className="rounded-lg border border-slate-200 p-4">
+      <div className="mb-3">
+        <h3 className="text-sm font-semibold text-slate-900">Cost Distribution</h3>
+        <p className="mt-1 text-sm text-slate-500">Estimated spend per question.</p>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Cost box plot" className="h-72 w-full">
+        <line x1={scale(min)} y1={axisY} x2={scale(max)} y2={axisY} stroke="#94a3b8" strokeWidth="2" />
+        <line x1={scale(min)} y1={axisY - 22} x2={scale(min)} y2={axisY + 22} stroke="#64748b" strokeWidth="2" />
+        <line x1={scale(max)} y1={axisY - 22} x2={scale(max)} y2={axisY + 22} stroke="#64748b" strokeWidth="2" />
+        <rect
+          x={scale(distribution.p25)}
+          y={axisY - boxHeight / 2}
+          width={Math.max(scale(distribution.p75) - scale(distribution.p25), 2)}
+          height={boxHeight}
+          rx="4"
+          fill="#d1fae5"
+          stroke="#059669"
+          strokeWidth="2"
+        />
+        <line x1={scale(distribution.p50)} y1={axisY - 32} x2={scale(distribution.p50)} y2={axisY + 32} stroke="#0f172a" strokeWidth="3" />
+        <line x1={scale(distribution.p95)} y1={axisY - 28} x2={scale(distribution.p95)} y2={axisY + 28} stroke="#f59e0b" strokeWidth="2" strokeDasharray="5 4" />
+        <line x1={scale(distribution.p99)} y1={axisY - 34} x2={scale(distribution.p99)} y2={axisY + 34} stroke="#dc2626" strokeWidth="2" strokeDasharray="5 4" />
+
+        {markers.map((marker) => (
+          <g key={marker.key}>
+            <circle cx={scale(marker.value)} cy={axisY} r="4" fill={marker.color} />
+            <line x1={scale(marker.value)} y1={axisY} x2="606" y2={marker.y - 5} stroke="#cbd5e1" strokeWidth="1" />
+            <circle cx="606" cy={marker.y - 5} r="3" fill={marker.color} />
+            <text x="622" y={marker.y} className="fill-slate-900 text-[13px] font-semibold">
+              {marker.label}
+            </text>
+            <text x="660" y={marker.y} className="fill-slate-500 text-[12px]">
+              {formatCost(marker.value)}
+            </text>
+          </g>
+        ))}
+
+        <text x={scale(min)} y={axisY + 66} textAnchor="middle" className="fill-slate-500 text-[12px]">
+          min {formatCost(min)}
+        </text>
+        <text x={scale(max)} y={axisY + 66} textAnchor="middle" className="fill-slate-500 text-[12px]">
+          max {formatCost(max)}
+        </text>
+      </svg>
+    </div>
+  );
+};
+
 const ClusterModal = ({ cluster, onClose }) => {
   const questions = cluster.questions || [];
 
@@ -847,6 +1060,7 @@ const ClusterModal = ({ cluster, onClose }) => {
                     <span>{item.created_at ? new Date(item.created_at).toLocaleString() : ''}</span>
                     <span className="rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-700">{item.source}</span>
                     <span className={outcomeClassName(item.outcome)}>{item.outcome}</span>
+                    <CostPill event={item} compact />
                     <span className="ml-auto tabular-nums">{formatMs(item.latency_ms)}</span>
                   </div>
                   <p className="mt-2 text-sm font-medium text-slate-900">{item.question}</p>
