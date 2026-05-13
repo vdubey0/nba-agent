@@ -61,6 +61,17 @@
     }
   },
   {
+    "id": "playoff_series_game_number",
+    "family": "game_specific",
+    "question": "What happened in Game 4 of Warriors vs Lakers?",
+    "expected": {
+      "plan_type": "single_query",
+      "min_steps": 1,
+      "max_steps": 1,
+      "required_step_types": ["query"]
+    }
+  },
+  {
     "id": "advanced_metric_usage_rate",
     "family": "advanced_metric",
     "question": "Which Warriors players have the highest usage rate in the last 10 games?",

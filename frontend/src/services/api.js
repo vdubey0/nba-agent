@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const ANALYTICS_TIMEOUT_MS = 30000;
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -76,6 +77,7 @@ const analyticsParams = (days, source, period) => {
 export const getAnalyticsSummary = async (days = 30, source = '', period = 'rolling') => {
   const response = await api.get('/admin/api/analytics/summary', {
     params: analyticsParams(days, source, period),
+    timeout: ANALYTICS_TIMEOUT_MS,
   });
   return response.data;
 };
@@ -83,6 +85,7 @@ export const getAnalyticsSummary = async (days = 30, source = '', period = 'roll
 export const getAnalyticsPerformance = async (days = 30, source = '', period = 'rolling') => {
   const response = await api.get('/admin/api/analytics/performance', {
     params: analyticsParams(days, source, period),
+    timeout: ANALYTICS_TIMEOUT_MS,
   });
   return response.data;
 };
@@ -90,6 +93,7 @@ export const getAnalyticsPerformance = async (days = 30, source = '', period = '
 export const getAnalyticsLatencyDistribution = async (days = 30, source = '', period = 'rolling') => {
   const response = await api.get('/admin/api/analytics/latency-distribution', {
     params: analyticsParams(days, source, period),
+    timeout: ANALYTICS_TIMEOUT_MS,
   });
   return response.data;
 };
@@ -97,6 +101,7 @@ export const getAnalyticsLatencyDistribution = async (days = 30, source = '', pe
 export const getAnalyticsCostDistribution = async (days = 30, source = '', period = 'rolling') => {
   const response = await api.get('/admin/api/analytics/cost-distribution', {
     params: analyticsParams(days, source, period),
+    timeout: ANALYTICS_TIMEOUT_MS,
   });
   return response.data;
 };
@@ -104,6 +109,7 @@ export const getAnalyticsCostDistribution = async (days = 30, source = '', perio
 export const getAnalyticsAccuracy = async (days = 30, source = '', period = 'rolling') => {
   const response = await api.get('/admin/api/analytics/accuracy', {
     params: analyticsParams(days, source, period),
+    timeout: ANALYTICS_TIMEOUT_MS,
   });
   return response.data;
 };
@@ -111,7 +117,13 @@ export const getAnalyticsAccuracy = async (days = 30, source = '', period = 'rol
 export const getAnalyticsQuestions = async (days = 30, source = '', period = 'rolling') => {
   const response = await api.get('/admin/api/analytics/questions', {
     params: analyticsParams(days, source, period),
+    timeout: ANALYTICS_TIMEOUT_MS,
   });
+  return response.data;
+};
+
+export const getAnalyticsEvent = async (eventId) => {
+  const response = await api.get(`/admin/api/analytics/events/${eventId}`);
   return response.data;
 };
 
@@ -120,7 +132,7 @@ export const invokeAutomaticReview = async (eventId) => {
   return response.data;
 };
 
-export const applyAutomaticReview = async (eventId, outcome, llmReview, reviewer = 'user') => {
+export const applyReview = async (eventId, outcome, llmReview = null, reviewer = 'user') => {
   const response = await api.post(`/admin/api/analytics/events/${eventId}/apply-review`, {
     outcome,
     reviewer,
@@ -128,6 +140,8 @@ export const applyAutomaticReview = async (eventId, outcome, llmReview, reviewer
   });
   return response.data;
 };
+
+export const applyAutomaticReview = applyReview;
 
 export default api;
 

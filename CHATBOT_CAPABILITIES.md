@@ -27,6 +27,7 @@ Questions may include these time and game-type constraints:
 - Clutch games, interpreted as games decided by 5 points or fewer
 - Close games, interpreted as games decided by 10 points or fewer
 - Blowout games, interpreted as games decided by 15 points or more
+- Playoff series game numbers, such as `Game 4`, interpreted as the fourth chronological game of the playoff matchup or series
 
 Format:
 
@@ -42,6 +43,9 @@ Examples:
 - `How did LeBron James perform in Lakers wins this season?`
 - `What did the Celtics average in close games?`
 - `How did the Knicks perform in blowout wins?`
+- `What happened in Game 4 of Warriors vs Lakers?`
+
+For playoff matchup questions, `Game X` means the Xth game of that playoff series. The chatbot should filter to `Playoffs`, identify the matchup from the named teams, order the series games chronologically, and answer from the Xth game rather than treating the phrase as a game ID, a date, or the last X games.
 
 ## Player Statistical Questions
 
@@ -471,7 +475,7 @@ The chatbot should not be documented as supporting capabilities outside the stru
 - Injury reports
 - Betting odds, lines, spreads, or sportsbook markets
 - Player contracts, salaries, trades, draft picks, standings, or roster transactions
-- Play-by-play, shot charts, lineup data, on/off ratings by exact lineup, or tracking data
+- Play-by-play, shot charts, lineup data (e.g. starter/bench), on/off ratings by exact lineup, or tracking data
 - Natural-language questions that require external web search or current NBA news
 - Non-NBA sports questions
 - Arbitrary SQL or unsupported custom formulas

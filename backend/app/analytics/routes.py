@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import String, and_, cast, func, not_, or_
+from sqlalchemy import and_, case, func, not_, or_
 from sqlalchemy.orm import Session
 
 from app.analytics.classification import classify_complexity, classify_intent, extract_entities, extract_stats, extract_time_range
@@ -25,10 +25,8 @@ from app.models.analytics import (
 router = APIRouter(prefix="/admin/api/analytics", tags=["analytics"])
 
 
-OPENAI_QUOTA_ERROR_MARKERS = (
-    "insufficient_quota",
-    "exceeded your current quota",
-)
+MANUAL_REVIEW_METHODS = {"manual_review", "llm_assisted_manual_review"}
+_UNSET = object()
 
 
 class ApplyReviewRequest(BaseModel):
@@ -103,21 +101,6 @@ def _base_events(
     return query
 
 
-def _openai_quota_error_clause():
-    error_message = func.coalesce(ChatQueryEvent.error_message, "")
-    payload_text = func.coalesce(cast(ChatQueryEvent.analytics_payload, String), "")
-    return or_(
-        *[
-            error_message.ilike(f"%{marker}%")
-            for marker in OPENAI_QUOTA_ERROR_MARKERS
-        ],
-        *[
-            payload_text.ilike(f"%{marker}%")
-            for marker in OPENAI_QUOTA_ERROR_MARKERS
-        ],
-    )
-
-
 def _dashboard_events(
     session: Session,
     days: int,
@@ -126,7 +109,7 @@ def _dashboard_events(
     date_from: str | None = None,
     date_to: str | None = None,
 ):
-    return _base_events(session, days, source, period, date_from, date_to).filter(not_(_openai_quota_error_clause()))
+    return _base_events(session, days, source, period, date_from, date_to)
 
 
 def _hour_bucket(value: datetime | None) -> str:
@@ -192,31 +175,31 @@ def analytics_summary(
     date_to: str | None = None,
     session: Session = Depends(get_session),
 ):
-    events = _dashboard_events(session, days, source, period, date_from, date_to)
-    total = events.count()
-    avg_latency = events.with_entities(func.avg(ChatQueryEvent.latency_ms)).scalar() or 0
-    total_cost = events.with_entities(func.sum(ChatQueryEvent.estimated_cost)).scalar() or 0
-    avg_cost = events.with_entities(func.avg(ChatQueryEvent.estimated_cost)).scalar() or 0
-    error_count = (
-        events.join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id, isouter=True)
-        .filter(
-            or_(
-                ChatEvaluation.outcome == "error",
-                ChatEvaluation.is_error.is_(True),
-                ChatQueryEvent.error_type.isnot(None),
-            )
+    total, avg_latency, total_cost, avg_cost, error_count, correct_count, verifiable_count = (
+        _dashboard_events(session, days, source, period, date_from, date_to)
+        .join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id, isouter=True)
+        .with_entities(
+            func.count(ChatQueryEvent.id),
+            func.avg(ChatQueryEvent.latency_ms),
+            func.sum(ChatQueryEvent.estimated_cost),
+            func.avg(ChatQueryEvent.estimated_cost),
+            func.sum(
+                case(
+                    (
+                        or_(
+                            ChatEvaluation.outcome == "error",
+                            ChatEvaluation.is_error.is_(True),
+                            ChatQueryEvent.error_type.isnot(None),
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+            func.sum(case((ChatEvaluation.outcome == "correct", 1), else_=0)),
+            func.sum(case((ChatEvaluation.is_verifiable.is_(True), 1), else_=0)),
         )
-        .count()
-    )
-    correct_count = (
-        events.join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id, isouter=True)
-        .filter(ChatEvaluation.outcome == "correct")
-        .count()
-    )
-    verifiable_count = (
-        events.join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id, isouter=True)
-        .filter(ChatEvaluation.is_verifiable.is_(True))
-        .count()
+        .one()
     )
     pending_jobs = session.query(AnalyticsJob).filter(AnalyticsJob.status.in_(["pending", "retrying", "processing"])).count()
 
@@ -225,9 +208,9 @@ def analytics_summary(
         "average_latency_ms": round(float(avg_latency), 2),
         "estimated_total_cost": round(float(total_cost), 6),
         "estimated_average_cost": round(float(avg_cost), 6),
-        "error_rate": round(error_count / total, 4) if total else 0,
-        "objective_accuracy_rate": round(correct_count / verifiable_count, 4) if verifiable_count else 0,
-        "verifiable_count": verifiable_count,
+        "error_rate": round((error_count or 0) / total, 4) if total else 0,
+        "objective_accuracy_rate": round((correct_count or 0) / verifiable_count, 4) if verifiable_count else 0,
+        "verifiable_count": verifiable_count or 0,
         "pending_jobs": pending_jobs,
     }
 
@@ -333,7 +316,6 @@ def analytics_performance(
         bucket["query_count"] += count
         bucket["latency_total"] += float(avg or 0) * count
 
-    slowest = events.order_by(ChatQueryEvent.latency_ms.desc()).limit(10).all()
     return {
         "by_day": [
             {
@@ -352,7 +334,7 @@ def analytics_performance(
             }
             for item in sorted(source_totals.values(), key=lambda row: row["query_count"], reverse=True)
         ],
-        "slowest": [_event_summary(event) for event in slowest],
+        "slowest": [],
     }
 
 
@@ -366,16 +348,34 @@ def analytics_accuracy(
     session: Session = Depends(get_session),
 ):
     events = _dashboard_events(session, days, source, period, date_from, date_to).subquery()
+    display_outcome_expr = case(
+        (
+            or_(
+                ChatQueryEvent.error_type.isnot(None),
+                ChatEvaluation.is_error.is_(True),
+            ),
+            "error",
+        ),
+        (
+            and_(
+                ChatEvaluation.outcome == "incorrect",
+                or_(
+                    ChatEvaluation.evaluation_method.is_(None),
+                    not_(ChatEvaluation.evaluation_method.in_(MANUAL_REVIEW_METHODS)),
+                ),
+            ),
+            "unverifiable",
+        ),
+        else_=func.coalesce(ChatEvaluation.outcome, "pending"),
+    )
     outcome_rows = (
-        session.query(ChatQueryEvent, ChatEvaluation)
+        session.query(display_outcome_expr.label("outcome"), func.count(ChatEvaluation.id))
         .join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id)
         .join(events, events.c.id == ChatQueryEvent.id)
+        .group_by(display_outcome_expr)
         .all()
     )
-    outcome_counts: dict[str, int] = {}
-    for event, evaluation in outcome_rows:
-        outcome = _display_outcome(event, evaluation)
-        outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
+    outcome_counts = {outcome: count for outcome, count in outcome_rows}
 
     by_intent = (
         session.query(
@@ -398,7 +398,7 @@ def analytics_accuracy(
         .filter(
             or_(
                 ChatEvaluation.evaluation_method.is_(None),
-                ChatEvaluation.evaluation_method != "llm_assisted_manual_review",
+                not_(ChatEvaluation.evaluation_method.in_(MANUAL_REVIEW_METHODS)),
             )
         )
         .order_by(ChatQueryEvent.created_at.desc())
@@ -417,7 +417,7 @@ def analytics_accuracy(
                 ChatQueryEvent.error_type.isnot(None),
                 and_(
                     ChatEvaluation.outcome == "incorrect",
-                    ChatEvaluation.evaluation_method == "llm_assisted_manual_review",
+                    ChatEvaluation.evaluation_method.in_(MANUAL_REVIEW_METHODS),
                 ),
             )
         )
@@ -433,7 +433,7 @@ def analytics_accuracy(
         ],
         "review_queue": [
             {
-                **_event_summary(event),
+                **_event_summary(event, evaluation=evaluation, analysis=analysis),
                 "outcome": _display_outcome(event, evaluation),
                 "mismatches": evaluation.mismatches,
                 "intent": analysis.intent_category if analysis else None,
@@ -442,7 +442,7 @@ def analytics_accuracy(
         ],
         "errors": [
             {
-                **_event_summary(event),
+                **_event_summary(event, evaluation=evaluation, analysis=analysis),
                 "outcome": _display_outcome(event, evaluation),
                 "mismatches": evaluation.mismatches,
                 "intent": analysis.intent_category if analysis else None,
@@ -541,8 +541,11 @@ def analytics_questions(
         key=lambda item: item["query_count"],
         reverse=True,
     )[:20]
-    recent = (
-        _dashboard_events(session, days, source, period, date_from, date_to)
+    recent_rows = (
+        session.query(ChatQueryEvent, ChatEvaluation, ChatQuestionAnalysis)
+        .join(ChatEvaluation, ChatEvaluation.query_event_id == ChatQueryEvent.id, isouter=True)
+        .join(ChatQuestionAnalysis, ChatQuestionAnalysis.query_event_id == ChatQueryEvent.id, isouter=True)
+        .join(events, events.c.id == ChatQueryEvent.id)
         .order_by(ChatQueryEvent.created_at.desc())
         .limit(50)
         .all()
@@ -569,7 +572,10 @@ def analytics_questions(
             for item, count, avg_latency, total_cost, avg_cost in complexity
         ],
         "clusters": clusters,
-        "recent_events": [_event_summary(event) for event in recent],
+        "recent_events": [
+            _event_summary(event, evaluation=evaluation, analysis=analysis)
+            for event, evaluation, analysis in recent_rows
+        ],
     }
 
 
@@ -649,12 +655,14 @@ def apply_review(event_id: str, request: ApplyReviewRequest, session: Session = 
     evaluation.is_error = stored_outcome == "error"
     evaluation.is_verifiable = stored_outcome in {"correct", "incorrect"}
     evaluation.is_correct = True if stored_outcome == "correct" else False if stored_outcome == "incorrect" else None
-    evaluation.evaluation_method = "llm_assisted_manual_review"
-    evaluation.mismatches = {
+    evaluation.evaluation_method = "llm_assisted_manual_review" if request.llm_review else "manual_review"
+    review_details = {
         "reviewer": request.reviewer or "user",
         "previous_evaluation": previous,
-        "llm_review": request.llm_review,
     }
+    if request.llm_review:
+        review_details["llm_review"] = request.llm_review
+    evaluation.mismatches = review_details
     evaluation.created_at = datetime.utcnow()
     (
         session.query(AnalyticsJob)
@@ -681,7 +689,11 @@ def apply_review(event_id: str, request: ApplyReviewRequest, session: Session = 
 def _display_outcome(event: ChatQueryEvent, evaluation: ChatEvaluation | None) -> str:
     if event.error_type or evaluation and evaluation.is_error:
         return "error"
-    if evaluation and evaluation.outcome == "incorrect" and evaluation.evaluation_method != "llm_assisted_manual_review":
+    if (
+        evaluation
+        and evaluation.outcome == "incorrect"
+        and evaluation.evaluation_method not in MANUAL_REVIEW_METHODS
+    ):
         return "unverifiable"
     if evaluation and evaluation.outcome:
         return evaluation.outcome
@@ -696,13 +708,18 @@ def _source_label(source: str | None) -> str:
     return source or "unknown"
 
 
-def _event_summary(event: ChatQueryEvent) -> dict[str, Any]:
-    display_outcome = _display_outcome(event, event.evaluation)
-    evaluation = _evaluation_summary(event.evaluation, display_outcome)
-    if not evaluation:
+def _event_summary(
+    event: ChatQueryEvent,
+    evaluation: ChatEvaluation | None | object = _UNSET,
+    analysis: ChatQuestionAnalysis | None | object = _UNSET,
+) -> dict[str, Any]:
+    event_evaluation = event.evaluation if evaluation is _UNSET else evaluation
+    display_outcome = _display_outcome(event, event_evaluation)
+    evaluation_summary = _evaluation_summary(event_evaluation, display_outcome)
+    if not evaluation_summary:
         outcome, _ = deterministic_outcome(event)
         display_outcome = outcome
-        evaluation = {
+        evaluation_summary = {
             "status": "inferred",
             "outcome": display_outcome,
             "is_verifiable": False,
@@ -713,7 +730,8 @@ def _event_summary(event: ChatQueryEvent) -> dict[str, Any]:
             "evaluation_method": "deterministic_outcome_fallback",
         }
 
-    question_analysis = _analysis_summary(event.question_analysis)
+    event_analysis = event.question_analysis if analysis is _UNSET else analysis
+    question_analysis = _analysis_summary(event_analysis)
     if not question_analysis or question_analysis.get("intent_category") == "error":
         entities = extract_entities(event)
         question_analysis = {
@@ -745,7 +763,7 @@ def _event_summary(event: ChatQueryEvent) -> dict[str, Any]:
         "result_row_count": event.result_row_count,
         "error_type": event.error_type,
         "error_message": _event_error_message(event),
-        "evaluation": evaluation,
+        "evaluation": evaluation_summary,
         "question_analysis": question_analysis,
     }
 

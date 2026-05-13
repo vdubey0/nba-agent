@@ -246,6 +246,13 @@ Rules:
 - date_from, date_to: YYYY-MM-DD string
 - last_n_games: positive integer
 - season_type: list of strings ["Pre Season", "Regular Season", "All-Star", "Playoffs", "Play-In", "In-Season Tournament"]
+- Playoff "Game X" references:
+  - If the user says "Game 1", "Game 2", "Game 3", etc. in a matchup or series context, interpret it as the Xth game of a playoff series, NOT as a game_id and NOT as the team's last X games.
+  - Set season_type to ["Playoffs"] unless the user explicitly says Play-In.
+  - Identify the matchup from resolved team entities. Use the requested team as subject.type = "team" and the other team as opponent_team_id.
+  - Fetch raw chronological games for that playoff matchup with sort {"by": "game_date", "direction": "asc"} and limit = X.
+  - Do NOT include aggregations, group_by, or derived_metrics for a playoff Game X lookup. The synthesis step will use the Xth row from the returned chronological rows.
+  - If only one team is named, fetch that team's playoff games in chronological order through limit = X only when the wording clearly means that team's series/game sequence; otherwise rely on clarification upstream rather than inventing the opponent.
 - game_outcome: "win" | "loss" | "all"
   CRITICAL: game_outcome refers to the SUBJECT's outcome (player's team or the team itself)
   - When asking about a PLAYER's stats "when team X wins", use:
@@ -386,6 +393,34 @@ INCORRECT (do not do this):
   "aggregations": {"pts": "mean", ...}  ← WRONG for recent games queries
 }
 
+**CRITICAL RULE FOR PLAYOFF SERIES GAME NUMBERS:**
+When the user asks about "Game X" in a playoff matchup or series:
+- Treat "Game X" as the Xth chronological game between those teams in the playoff series.
+- Use filters.season_type = ["Playoffs"].
+- Use filters.opponent_team_id for the other team in the matchup.
+- Use sort {"by": "game_date", "direction": "asc"}.
+- Use limit = X so the execution results contain Games 1 through X.
+- Do NOT use last_n_games for "Game X".
+- Do NOT aggregate. Return raw game rows so synthesis can select the Xth row.
+
+Example:
+Question: "What happened in Game 4 of Warriors vs Lakers?"
+Assume Warriors ID is 1610612744 and Lakers ID is 1610612747.
+CORRECT query_spec:
+{
+  "scope": "team_game_stats",
+  "subject": {"type": "team", "id": 1610612744},
+  "filters": {
+    "season": "2025-26",
+    "season_type": ["Playoffs"],
+    "opponent_team_id": 1610612747
+  },
+  "sort": {"by": "game_date", "direction": "asc"},
+  "limit": 4
+}
+
+If the question asks for player stats in Game 4, use player_game_stats with the player or team subject, the same Playoffs/opponent filters, ascending game_date sort, and limit 4. The synthesis step will answer from the 4th returned game.
+
 Example:
 Question: "Which players this season had the highest standard deviation in points?"
 CORRECT query_spec:
@@ -499,9 +534,9 @@ Player Advanced:
 - tov_pct: tov, fga, fta
 - usage_rate: fga, fta, tov, minutes
 - game_score: pts, fgm, fga, ftm, fta, oreb, dreb, stl, ast, blk, fouls, tov
-- ast_pct: ast, fgm
+- ast_pct: ast, fgm, minutes, game_id count
 - ast_to_ratio: ast, tov
-- reb_pct, oreb_pct, dreb_pct, stl_pct, blk_pct: reb, oreb, dreb, stl, blk
+- reb_pct, oreb_pct, dreb_pct, stl_pct, blk_pct: reb, oreb, dreb, stl, blk, minutes, game_id count
 
 Betting/Fantasy:
 - pts_reb: pts, reb

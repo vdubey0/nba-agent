@@ -20,6 +20,7 @@ from app.models.analytics import ChatEvaluation, ChatQueryEvent, ChatQuestionAna
 
 
 logger = logging.getLogger(__name__)
+MANUAL_REVIEW_METHODS = {"manual_review", "llm_assisted_manual_review"}
 
 
 def process_event(session: Session, event: ChatQueryEvent, *, allow_llm_claim_extraction: bool = True) -> None:
@@ -32,7 +33,7 @@ def process_event(session: Session, event: ChatQueryEvent, *, allow_llm_claim_ex
         .filter(ChatEvaluation.query_event_id == event.id)
         .one_or_none()
     )
-    preserve_manual_review = evaluation and evaluation.evaluation_method == "llm_assisted_manual_review"
+    preserve_manual_review = evaluation and evaluation.evaluation_method in MANUAL_REVIEW_METHODS
 
     expected = []
     extracted = []
@@ -63,7 +64,7 @@ def process_event(session: Session, event: ChatQueryEvent, *, allow_llm_claim_ex
         session.add(evaluation)
     elif not preserve_manual_review:
         session.refresh(evaluation)
-        preserve_manual_review = evaluation.evaluation_method == "llm_assisted_manual_review"
+        preserve_manual_review = evaluation.evaluation_method in MANUAL_REVIEW_METHODS
 
     if not preserve_manual_review:
         evaluation.evaluation_status = "completed"

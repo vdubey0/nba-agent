@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
@@ -64,6 +65,30 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(analytics_router)
+
+
+@app.middleware("http")
+async def log_analytics_requests(request, call_next):
+    if not request.url.path.startswith("/admin/api/analytics"):
+        return await call_next(request)
+
+    started_at = time.perf_counter()
+    logger.info("Analytics request started: %s", request.url.path)
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        logger.exception("Analytics request failed after %.1f ms: %s", elapsed_ms, request.url.path)
+        raise
+
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    logger.info(
+        "Analytics request finished in %.1f ms: %s %s",
+        elapsed_ms,
+        response.status_code,
+        request.url.path,
+    )
+    return response
 
 app.add_middleware(
     CORSMiddleware,

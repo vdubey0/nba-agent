@@ -86,6 +86,17 @@ CAPABILITIES: tuple[PlannerCapability, ...] = (
         examples=("Who scored the most points in the last Lakers game?",),
     ),
     PlannerCapability(
+        capability_id="playoff_series_game_number",
+        plan_type="single_query",
+        description="Playoff Game X means the Xth chronological game of a playoff matchup or series.",
+        cues=("game 1", "game 2", "game 3", "game 4", "game 5", "game 6", "game 7", "series"),
+        planning_hints=(
+            "For playoff Game X, use season_type = ['Playoffs'], the matchup opponent_team_id, sort by game_date ascending, and limit X.",
+            "Do not use last_n_games for Game X, and do not aggregate; return raw rows so synthesis can select the Xth game.",
+        ),
+        examples=("What happened in Game 4 of Warriors vs Lakers?",),
+    ),
+    PlannerCapability(
         capability_id="advanced_metric",
         plan_type="single_query",
         description="Advanced and derived metrics need their component aggregations.",

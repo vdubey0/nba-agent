@@ -55,6 +55,19 @@ You should choose the best format for clarity:
    - The question asks about recent/last N games
    - You have game_date or opponent information available
 
+5. **SPECIAL CASE - Playoff Series Game Numbers:**
+   When the question asks about "Game X" in a playoff matchup or series, and the execution results contain raw chronological game rows:
+
+   → Answer using ONLY the Xth row in chronological order.
+
+   Rules:
+   - "Game 4" means the 4th game of that playoff series or matchup.
+   - Do NOT average Games 1 through 4.
+   - Do NOT treat Game X as the most recent X games.
+   - If the planner returned Games 1 through X using an ascending game_date sort and limit X, select the last row in that returned set as Game X.
+   - Mention the matchup, date, score/result, and requested stats when those fields are available.
+   - If fewer than X rows are present, say that the provided results do not include a Game X for that playoff matchup.
+
 ==================================================
 TABLE FORMATTING RULES
 ==================================================
@@ -124,6 +137,7 @@ RULES
    - Pace is calculated by dividing the total number of possessions by the total number of minutes played.
    - Effective field goal percentage is calculated by dividing the total number of made field goals by the total number of shot attempts.
    - Game Score is calculated by PTS + 0.4*FGM - 0.7*FGA - 0.4*(FTA-FTM) + 0.7*OREB + 0.3*DREB + STL + 0.7*AST + 0.7*BLK - 0.4*PF - TOV.
+11. For playoff Game X questions, use the playoff-series rule above before applying general multi-row table behavior.
 
 ==================================================
 EXAMPLES

@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-  applyAutomaticReview,
+  applyReview,
   getAnalyticsAccuracy,
   getAnalyticsCostDistribution,
+  getAnalyticsEvent,
   getAnalyticsLatencyDistribution,
   getAnalyticsPerformance,
   getAnalyticsQuestions,
@@ -37,6 +38,7 @@ const formatTokens = (value) => (
 const formatWindowLabel = (days, period = 'rolling') => (
   period === 'today' ? 'Today' : `Last ${days} days`
 );
+const ANALYTICS_REFRESH_MS = 30000;
 const attentionQuestionCardClass = 'rounded-lg border border-slate-200 bg-white p-3';
 const attentionOutcomePillClass = 'rounded-full bg-red-100 px-2 py-1 text-xs font-medium text-red-700';
 const outcomeClassName = (outcome) => (
@@ -71,6 +73,7 @@ const AnalyticsDashboard = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [reviewingId, setReviewingId] = useState(null);
+  const [manualReviewingId, setManualReviewingId] = useState(null);
   const [reviewSession, setReviewSession] = useState(null);
   const [reviewActionError, setReviewActionError] = useState(null);
   const [savingReview, setSavingReview] = useState(false);
@@ -82,6 +85,7 @@ const AnalyticsDashboard = () => {
   const appliedReviewIdsRef = useRef(new Set());
   const appliedReviewEventsRef = useRef(new Map());
   const analyticsRequestIdRef = useRef(0);
+  const analyticsInFlightRef = useRef(false);
 
   const clearAnalyticsState = useCallback(() => {
     setSummary(null);
@@ -93,6 +97,10 @@ const AnalyticsDashboard = () => {
   }, []);
 
   const loadAnalytics = useCallback(async ({ silent = false } = {}) => {
+    if (silent && analyticsInFlightRef.current) {
+      return;
+    }
+    analyticsInFlightRef.current = true;
     const requestId = analyticsRequestIdRef.current + 1;
     analyticsRequestIdRef.current = requestId;
     if (!silent) {
@@ -110,6 +118,7 @@ const AnalyticsDashboard = () => {
         getAnalyticsQuestions(days, source, period),
       ]);
       if (requestId !== analyticsRequestIdRef.current) return;
+
       const appliedReviewIds = appliedReviewIdsRef.current;
       const appliedReviewEvents = appliedReviewEventsRef.current;
       const filteredAccuracyData = {
@@ -139,9 +148,12 @@ const AnalyticsDashboard = () => {
       setQuestions(filteredQuestionsData);
     } catch (err) {
       if (requestId === analyticsRequestIdRef.current) {
-        setError(err.message || 'Failed to load analytics');
+        setError(err.response?.data?.detail || err.message || 'Failed to load analytics');
       }
     } finally {
+      if (requestId === analyticsRequestIdRef.current) {
+        analyticsInFlightRef.current = false;
+      }
       if (requestId === analyticsRequestIdRef.current && !silent) {
         setLoading(false);
       }
@@ -154,7 +166,7 @@ const AnalyticsDashboard = () => {
       if (document.visibilityState === 'visible') {
         loadAnalytics({ silent: true });
       }
-    }, 5000);
+    }, ANALYTICS_REFRESH_MS);
     return () => {
       analyticsRequestIdRef.current += 1;
       window.clearInterval(refreshTimer);
@@ -185,6 +197,28 @@ const AnalyticsDashboard = () => {
       setError(err.response?.data?.detail || err.message || 'Automatic review failed');
     } finally {
       setReviewingId(null);
+    }
+  };
+
+  const handleManualReview = async (event) => {
+    setManualReviewingId(event.id);
+    setReviewActionError(null);
+    try {
+      const eventDetail = await getAnalyticsEvent(event.id);
+      setReviewSession({
+        mode: 'manual',
+        index: 0,
+        items: [{
+          event: eventDetail,
+          review: null,
+          selectedOutcome: null,
+          status: 'pending',
+        }],
+      });
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || 'Failed to open manual review');
+    } finally {
+      setManualReviewingId(null);
     }
   };
 
@@ -250,7 +284,7 @@ const AnalyticsDashboard = () => {
         ...(event.evaluation || {}),
         status: 'completed',
         outcome,
-        evaluation_method: 'llm_assisted_manual_review',
+        evaluation_method: 'manual_review',
       },
       outcome,
     };
@@ -301,7 +335,7 @@ const AnalyticsDashboard = () => {
   };
 
   const refreshAnalyticsInBackground = () => {
-    loadAnalytics().catch((err) => {
+    loadAnalytics({ silent: true }).catch((err) => {
       setError(err.message || 'Failed to refresh analytics');
     });
   };
@@ -327,7 +361,7 @@ const AnalyticsDashboard = () => {
     setSavingReview(true);
     setReviewActionError(null);
     try {
-      const result = await applyAutomaticReview(currentItem.event.id, outcome, currentItem.review, reviewer);
+      const result = await applyReview(currentItem.event.id, outcome, currentItem.review || null, reviewer);
       const storedOutcome = result?.evaluation?.outcome || outcome;
       updateCurrentReviewItem({ status: 'applied', appliedOutcome: storedOutcome });
       updateAnalyticsAfterReview(currentItem.event, storedOutcome, result?.event);
@@ -341,6 +375,10 @@ const AnalyticsDashboard = () => {
 
   const closeReviewModal = async () => {
     if (!reviewSession || savingReview) return;
+    if (reviewSession.mode === 'manual') {
+      setReviewSession(null);
+      return;
+    }
     if (reviewSession.mode === 'bulk') {
       setReviewSession(null);
       refreshAnalyticsInBackground();
@@ -528,6 +566,14 @@ const AnalyticsDashboard = () => {
                   >
                     {reviewingId === event.id ? 'Reviewing...' : 'Invoke automatic review'}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => handleManualReview(event)}
+                    disabled={manualReviewingId === event.id}
+                    className="ml-2 mt-3 inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {manualReviewingId === event.id ? 'Opening...' : 'Manual review'}
+                  </button>
                 </div>
               ))}
               {(accuracy?.review_queue || []).length === 0 && <Empty />}
@@ -647,8 +693,10 @@ const AnalyticsDashboard = () => {
           onApply={() => {
             const currentItem = reviewSession.items[reviewSession.index];
             applyCurrentReview(
-              currentItem.selectedOutcome || currentItem.review.classification,
-              currentItem.selectedOutcome ? 'user_override' : 'llm_accept',
+              currentItem.selectedOutcome || currentItem.review?.classification,
+              reviewSession.mode === 'manual'
+                ? 'manual_review'
+                : currentItem.selectedOutcome ? 'user_override' : 'llm_accept',
             );
           }}
           onSkip={skipCurrentReview}
@@ -1143,6 +1191,7 @@ const ReviewModal = ({ session, onSelect, onApply, onSkip, onBack, onClose, erro
   const effectiveOutcome = selectedOutcome || classification;
   const needsDecision = classification === 'ambiguous' && !selectedOutcome;
   const isBulk = session.mode === 'bulk';
+  const isManual = session.mode === 'manual';
   const alreadyApplied = status === 'applied';
 
   return (
@@ -1150,9 +1199,13 @@ const ReviewModal = ({ session, onSelect, onApply, onSkip, onBack, onClose, erro
       <div className="max-h-full w-full max-w-2xl overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
           <div>
-            <h2 className="text-lg font-semibold text-slate-950">Automatic Review</h2>
+            <h2 className="text-lg font-semibold text-slate-950">{isManual ? 'Manual Review' : 'Automatic Review'}</h2>
             <p className="mt-1 text-sm text-slate-500">
-              {isBulk ? `Question ${session.index + 1} of ${session.items.length}` : 'Review the LLM classification before updating correctness.'}
+              {isBulk
+                ? `Question ${session.index + 1} of ${session.items.length}`
+                : isManual
+                  ? 'Choose a final correctness outcome without invoking the LLM.'
+                  : 'Review the LLM classification before updating correctness.'}
             </p>
           </div>
           <button
@@ -1166,14 +1219,16 @@ const ReviewModal = ({ session, onSelect, onApply, onSkip, onBack, onClose, erro
         </div>
 
         <div className="space-y-5 p-5">
-          <div>
-            <span className="rounded-full bg-cyan-50 px-2 py-1 text-xs font-semibold text-cyan-700">
-              LLM: {classification}
-            </span>
-            <span className="ml-2 rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
-              confidence: {review?.confidence || 'unknown'}
-            </span>
-          </div>
+          {!isManual && (
+            <div>
+              <span className="rounded-full bg-cyan-50 px-2 py-1 text-xs font-semibold text-cyan-700">
+                LLM: {classification}
+              </span>
+              <span className="ml-2 rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
+                confidence: {review?.confidence || 'unknown'}
+              </span>
+            </div>
+          )}
 
           <div className="rounded-lg border border-slate-200 p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Question</p>
@@ -1182,10 +1237,12 @@ const ReviewModal = ({ session, onSelect, onApply, onSkip, onBack, onClose, erro
             <MarkdownAnswer>{event.bot_response || event.bot_response_preview || 'No answer captured.'}</MarkdownAnswer>
           </div>
 
-          <div>
-            <p className="text-sm font-semibold text-slate-900">Rationale</p>
-            <p className="mt-2 text-sm text-slate-600">{review?.rationale || 'No rationale returned.'}</p>
-          </div>
+          {!isManual && (
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Rationale</p>
+              <p className="mt-2 text-sm text-slate-600">{review?.rationale || 'No rationale returned.'}</p>
+            </div>
+          )}
 
           <div>
             <p className="text-sm font-semibold text-slate-900">Final classification</p>
@@ -1216,8 +1273,11 @@ const ReviewModal = ({ session, onSelect, onApply, onSkip, onBack, onClose, erro
                 This answer was an error, empty, or obvious non-answer.
               </p>
             )}
-            {needsDecision && (
+            {needsDecision && !isManual && (
               <p className="mt-2 text-xs text-amber-700">Ambiguous classifications require a human correct/incorrect decision.</p>
+            )}
+            {needsDecision && isManual && (
+              <p className="mt-2 text-xs text-amber-700">Choose correct or incorrect to apply a manual review.</p>
             )}
             {alreadyApplied && (
               <p className="mt-2 text-xs text-emerald-700">Applied as {currentItem.appliedOutcome}.</p>

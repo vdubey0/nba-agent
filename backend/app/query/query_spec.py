@@ -27,12 +27,12 @@ DERIVED_METRIC_REQUIRED_AGGREGATIONS = {
     'fg3_pct': {'fg3m': 'sum', 'fg3a': 'sum'},
     'ft_pct': {'ftm': 'sum', 'fta': 'sum'},
     'usage_rate': {'fga': 'sum', 'fta': 'sum', 'tov': 'sum', 'minutes': 'sum', 'game_id': 'count'},
-    'ast_pct': {'ast': 'sum', 'fgm': 'sum'},
-    'reb_pct': {'reb': 'sum', 'game_id': 'count'},
-    'oreb_pct': {'oreb': 'sum', 'game_id': 'count'},
-    'dreb_pct': {'dreb': 'sum', 'game_id': 'count'},
-    'stl_pct': {'stl': 'sum', 'game_id': 'count'},
-    'blk_pct': {'blk': 'sum', 'game_id': 'count'},
+    'ast_pct': {'ast': 'sum', 'fgm': 'sum', 'minutes': 'sum', 'game_id': 'count'},
+    'reb_pct': {'reb': 'sum', 'minutes': 'sum', 'game_id': 'count'},
+    'oreb_pct': {'oreb': 'sum', 'minutes': 'sum', 'game_id': 'count'},
+    'dreb_pct': {'dreb': 'sum', 'minutes': 'sum', 'game_id': 'count'},
+    'stl_pct': {'stl': 'sum', 'minutes': 'sum', 'game_id': 'count'},
+    'blk_pct': {'blk': 'sum', 'minutes': 'sum', 'game_id': 'count'},
     'game_score': {
         'pts': 'sum', 'fgm': 'sum', 'fga': 'sum', 'ftm': 'sum', 'fta': 'sum',
         'oreb': 'sum', 'dreb': 'sum', 'stl': 'sum', 'ast': 'sum', 'blk': 'sum',
@@ -932,14 +932,29 @@ def run_query_spec(session, query_spec: dict) -> dict:
     TeamMetaOpp = aliased(Team)
 
     opponent_stat_cols = None
+    player_team_stat_cols = None
+    player_opponent_stat_cols = None
 
     if scope_name == 'player_game_stats':
+        TeamStatsForPlayer = aliased(TeamGameStats)
+        OppTeamStatsForPlayer = aliased(TeamGameStats)
+
         if using_subquery:
             query = (
                 query
                 .join(Player, subject_cols.player_id == Player.player_id)
                 .join(TeamMetaSelf, subject_cols.team_id == TeamMetaSelf.team_id)
                 .join(TeamMetaOpp, subject_cols.opponent_team_id == TeamMetaOpp.team_id)
+                .outerjoin(
+                    TeamStatsForPlayer,
+                    (subject_cols.game_id == TeamStatsForPlayer.game_id) &
+                    (subject_cols.team_id == TeamStatsForPlayer.team_id)
+                )
+                .outerjoin(
+                    OppTeamStatsForPlayer,
+                    (subject_cols.game_id == OppTeamStatsForPlayer.game_id) &
+                    (subject_cols.opponent_team_id == OppTeamStatsForPlayer.team_id)
+                )
             )
         else:
             query = (
@@ -947,21 +962,50 @@ def run_query_spec(session, query_spec: dict) -> dict:
                 .join(Player, base_scope.player_id == Player.player_id)
                 .join(TeamMetaSelf, base_scope.team_id == TeamMetaSelf.team_id)
                 .join(TeamMetaOpp, base_scope.opponent_team_id == TeamMetaOpp.team_id)
+                .outerjoin(
+                    TeamStatsForPlayer,
+                    (base_scope.game_id == TeamStatsForPlayer.game_id) &
+                    (base_scope.team_id == TeamStatsForPlayer.team_id)
+                )
+                .outerjoin(
+                    OppTeamStatsForPlayer,
+                    (base_scope.game_id == OppTeamStatsForPlayer.game_id) &
+                    (base_scope.opponent_team_id == OppTeamStatsForPlayer.team_id)
+                )
             )
+
+        player_team_stat_cols = TeamStatsForPlayer
+        player_opponent_stat_cols = OppTeamStatsForPlayer
     else:
         if perspective == 'self':
+            OppTeamStatsForTeam = aliased(TeamGameStats)
+
             if using_subquery:
                 query = (
                     query
                     .join(TeamMetaSelf, subject_cols.team_id == TeamMetaSelf.team_id)
                     .join(TeamMetaOpp, subject_cols.opponent_team_id == TeamMetaOpp.team_id)
+                    .outerjoin(
+                        OppTeamStatsForTeam,
+                        (subject_cols.game_id == OppTeamStatsForTeam.game_id) &
+                        (subject_cols.team_id == OppTeamStatsForTeam.opponent_team_id) &
+                        (subject_cols.opponent_team_id == OppTeamStatsForTeam.team_id)
+                    )
                 )
             else:
                 query = (
                     query
                     .join(TeamMetaSelf, base_scope.team_id == TeamMetaSelf.team_id)
                     .join(TeamMetaOpp, base_scope.opponent_team_id == TeamMetaOpp.team_id)
+                    .outerjoin(
+                        OppTeamStatsForTeam,
+                        (base_scope.game_id == OppTeamStatsForTeam.game_id) &
+                        (base_scope.team_id == OppTeamStatsForTeam.opponent_team_id) &
+                        (base_scope.opponent_team_id == OppTeamStatsForTeam.team_id)
+                    )
                 )
+
+            opponent_stat_cols = OppTeamStatsForTeam
         else:
             OppTeamStats = aliased(TeamGameStats)
 
@@ -1151,7 +1195,6 @@ def run_query_spec(session, query_spec: dict) -> dict:
 
     if 'ast_pct' in aggregate_derived_metrics:
         # Assist Percentage (Player): 100 * AST / (((MP/(Team_MP/5)) * Team_FGM) - FGM)
-        # Simplified: assists per field goal made
         if scope_name != 'player_game_stats':
             return {
                 "status": "failed",
@@ -1159,19 +1202,29 @@ def run_query_spec(session, query_spec: dict) -> dict:
             }
         ast_sum = metric_component_sum('ast')
         fgm_sum = metric_component_sum('fgm')
-        if ast_sum is None or fgm_sum is None:
+        minutes_sum = metric_component_sum('minutes')
+        game_count = agg_label_map.get('game_id_count')
+        if player_team_stat_cols is None:
             return {
                 "status": "failed",
-                "message": "ast_pct calculation requires ast and fgm."
+                "message": "ast_pct calculation requires team game stats."
             }
-        # Simplified: assists per made field goal
-        expr = safe_pct_expr(100.0 * ast_sum, fgm_sum, 'ast_pct')
+        team_fgm_sum = func.sum(cast(player_team_stat_cols.fgm, Float))
+        if ast_sum is None or fgm_sum is None or minutes_sum is None or game_count is None:
+            return {
+                "status": "failed",
+                "message": "ast_pct calculation requires ast, fgm, minutes, and game_id count."
+            }
+        team_slot_minutes = 48.0 * game_count
+        ast_denom = (minutes_sum * team_fgm_sum) - (fgm_sum * team_slot_minutes)
+        expr = case(
+            (ast_denom <= 0, None),
+            else_=(100.0 * ast_sum * team_slot_minutes / ast_denom)
+        ).label('ast_pct')
         derived_metric_exprs.append(expr)
         derived_metric_map['ast_pct'] = expr
 
     if 'reb_pct' in aggregate_derived_metrics:
-        # Rebound Percentage: Simplified as rebounds per game
-        # True calculation requires team/opponent data which isn't available in aggregated queries
         reb_sum = metric_component_sum('reb')
         game_count = agg_label_map.get('game_id_count')
         if reb_sum is None or game_count is None:
@@ -1179,10 +1232,35 @@ def run_query_spec(session, query_spec: dict) -> dict:
                 "status": "failed",
                 "message": "reb_pct calculation requires reb and game_id count."
             }
-        expr = case(
-            (game_count == 0, None),
-            else_=(reb_sum / game_count)
-        ).label('reb_pct')
+        if scope_name == 'player_game_stats':
+            # Rebound Percentage: 100 * REB * (Team_MP/5) / (MP * (Team_REB + Opp_REB))
+            minutes_sum = metric_component_sum('minutes')
+            if minutes_sum is None:
+                return {
+                    "status": "failed",
+                    "message": "reb_pct calculation requires minutes."
+                }
+            if player_team_stat_cols is None or player_opponent_stat_cols is None:
+                return {
+                    "status": "failed",
+                    "message": "reb_pct calculation requires team and opponent game stats."
+                }
+            team_reb_sum = func.sum(cast(player_team_stat_cols.reb, Float))
+            opp_reb_sum = func.sum(cast(player_opponent_stat_cols.reb, Float))
+            reb_denom = minutes_sum * (team_reb_sum + opp_reb_sum)
+            expr = case(
+                (reb_denom <= 0, None),
+                else_=(100.0 * reb_sum * 48.0 * game_count / reb_denom)
+            ).label('reb_pct')
+        elif opponent_stat_cols is not None:
+            opp_reb_sum = func.sum(cast(opponent_stat_cols.reb, Float))
+            reb_denom = reb_sum + opp_reb_sum
+            expr = safe_pct_expr(100.0 * reb_sum, reb_denom, 'reb_pct')
+        else:
+            expr = case(
+                (game_count == 0, None),
+                else_=(reb_sum / game_count)
+            ).label('reb_pct')
         derived_metric_exprs.append(expr)
         derived_metric_map['reb_pct'] = expr
 
@@ -1195,10 +1273,23 @@ def run_query_spec(session, query_spec: dict) -> dict:
                 "message": "oreb_pct calculation requires oreb and game_id count."
             }
         if scope_name == 'player_game_stats':
-            # For players: offensive rebounds per game
+            minutes_sum = metric_component_sum('minutes')
+            if minutes_sum is None:
+                return {
+                    "status": "failed",
+                    "message": "oreb_pct calculation requires minutes."
+                }
+            if player_team_stat_cols is None or player_opponent_stat_cols is None:
+                return {
+                    "status": "failed",
+                    "message": "oreb_pct calculation requires team and opponent game stats."
+                }
+            team_oreb_sum = func.sum(cast(player_team_stat_cols.oreb, Float))
+            opp_dreb_sum = func.sum(cast(player_opponent_stat_cols.dreb, Float))
+            oreb_denom = minutes_sum * (team_oreb_sum + opp_dreb_sum)
             expr = case(
-                (game_count == 0, None),
-                else_=(oreb_sum / game_count)
+                (oreb_denom <= 0, None),
+                else_=(100.0 * oreb_sum * 48.0 * game_count / oreb_denom)
             ).label('oreb_pct')
         else:
             # For team stats, calculate OREB / (OREB + Opp_DREB) if opponent stats available
@@ -1224,10 +1315,23 @@ def run_query_spec(session, query_spec: dict) -> dict:
                 "message": "dreb_pct calculation requires dreb and game_id count."
             }
         if scope_name == 'player_game_stats':
-            # For players: defensive rebounds per game
+            minutes_sum = metric_component_sum('minutes')
+            if minutes_sum is None:
+                return {
+                    "status": "failed",
+                    "message": "dreb_pct calculation requires minutes."
+                }
+            if player_team_stat_cols is None or player_opponent_stat_cols is None:
+                return {
+                    "status": "failed",
+                    "message": "dreb_pct calculation requires team and opponent game stats."
+                }
+            team_dreb_sum = func.sum(cast(player_team_stat_cols.dreb, Float))
+            opp_oreb_sum = func.sum(cast(player_opponent_stat_cols.oreb, Float))
+            dreb_denom = minutes_sum * (team_dreb_sum + opp_oreb_sum)
             expr = case(
-                (game_count == 0, None),
-                else_=(dreb_sum / game_count)
+                (dreb_denom <= 0, None),
+                else_=(100.0 * dreb_sum * 48.0 * game_count / dreb_denom)
             ).label('dreb_pct')
         else:
             # For team stats, calculate DREB / (DREB + Opp_OREB) if opponent stats available
@@ -1245,33 +1349,55 @@ def run_query_spec(session, query_spec: dict) -> dict:
         derived_metric_map['dreb_pct'] = expr
 
     if 'stl_pct' in aggregate_derived_metrics:
-        # Steal Percentage: steals per game
+        # Steal Percentage: 100 * STL * (Team_MP/5) / (MP * Opp_Possessions)
         stl_sum = metric_component_sum('stl')
+        minutes_sum = metric_component_sum('minutes')
         game_count = agg_label_map.get('game_id_count')
-        if stl_sum is None or game_count is None:
+        if player_opponent_stat_cols is None:
             return {
                 "status": "failed",
-                "message": "stl_pct calculation requires stl and game_id count."
+                "message": "stl_pct calculation requires opponent game stats."
             }
+        opp_fga_sum = func.sum(cast(player_opponent_stat_cols.fga, Float))
+        opp_fta_sum = func.sum(cast(player_opponent_stat_cols.fta, Float))
+        opp_oreb_sum = func.sum(cast(player_opponent_stat_cols.oreb, Float))
+        opp_tov_sum = func.sum(cast(player_opponent_stat_cols.tov, Float))
+        if stl_sum is None or minutes_sum is None or game_count is None:
+            return {
+                "status": "failed",
+                "message": "stl_pct calculation requires stl, minutes, and game_id count."
+            }
+        opp_possessions = opp_fga_sum + 0.44 * opp_fta_sum - opp_oreb_sum + opp_tov_sum
+        stl_denom = minutes_sum * opp_possessions
         expr = case(
-            (game_count == 0, None),
-            else_=(stl_sum / game_count)
+            (stl_denom <= 0, None),
+            else_=(100.0 * stl_sum * 48.0 * game_count / stl_denom)
         ).label('stl_pct')
         derived_metric_exprs.append(expr)
         derived_metric_map['stl_pct'] = expr
 
     if 'blk_pct' in aggregate_derived_metrics:
-        # Block Percentage: blocks per game
+        # Block Percentage: 100 * BLK * (Team_MP/5) / (MP * Opp_2PA)
         blk_sum = metric_component_sum('blk')
+        minutes_sum = metric_component_sum('minutes')
         game_count = agg_label_map.get('game_id_count')
-        if blk_sum is None or game_count is None:
+        if player_opponent_stat_cols is None:
             return {
                 "status": "failed",
-                "message": "blk_pct calculation requires blk and game_id count."
+                "message": "blk_pct calculation requires opponent game stats."
             }
+        opp_fga_sum = func.sum(cast(player_opponent_stat_cols.fga, Float))
+        opp_fg3a_sum = func.sum(cast(player_opponent_stat_cols.fg3a, Float))
+        if blk_sum is None or minutes_sum is None or game_count is None:
+            return {
+                "status": "failed",
+                "message": "blk_pct calculation requires blk, minutes, and game_id count."
+            }
+        opp_two_point_attempts = opp_fga_sum - opp_fg3a_sum
+        blk_denom = minutes_sum * opp_two_point_attempts
         expr = case(
-            (game_count == 0, None),
-            else_=(blk_sum / game_count)
+            (blk_denom <= 0, None),
+            else_=(100.0 * blk_sum * 48.0 * game_count / blk_denom)
         ).label('blk_pct')
         derived_metric_exprs.append(expr)
         derived_metric_map['blk_pct'] = expr
