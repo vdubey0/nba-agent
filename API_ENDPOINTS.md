@@ -288,6 +288,79 @@ curl -X POST https://backend-api-production-281a.up.railway.app/api/query \
 
 `/api/query` may return the same application-level statuses as `/api/chat`, including `"error"` and `"needs_clarification"`. Because it is stateless, use `/api/chat` when you need a complete clarification follow-up flow.
 
+## POST /api/query/batch
+
+Runs multiple stateless one-shot questions in parallel. Each question uses the same pipeline as `/api/query` and gets its own database session, analytics event, and result object.
+
+Use this endpoint for batch evaluations, scripts, and clients that need to answer several independent questions at once.
+
+### Request Body
+
+```json
+{
+  "questions": [
+    "How many threes did LeBron make against the Cavs?",
+    "Who led the Warriors in points last season?"
+  ],
+  "include_steps": false,
+  "max_concurrency": 10
+}
+```
+
+### Fields
+
+- `questions`: Required list of natural-language basketball questions.
+- `include_steps`: Optional. When `true`, includes intermediate details for every result.
+- `max_concurrency`: Optional. Number of questions to run at once. Defaults to `10` and cannot exceed `10`.
+
+### Request
+
+```bash
+curl -X POST https://backend-api-production-281a.up.railway.app/api/query/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "questions": [
+      "How many threes did LeBron make against the Cavs?",
+      "Who led the Warriors in points last season?"
+    ],
+    "include_steps": false,
+    "max_concurrency": 10
+  }'
+```
+
+### Response
+
+Results are returned in the same order as the input questions. A failure in one item does not fail the whole batch.
+
+```json
+{
+  "status": "success",
+  "total": 2,
+  "succeeded": 2,
+  "failed": 0,
+  "max_concurrency": 10,
+  "results": [
+    {
+      "index": 0,
+      "question": "How many threes did LeBron make against the Cavs?",
+      "status": "success",
+      "response": "LeBron James made ...",
+      "clarification": null,
+      "intermediate_steps": null,
+      "error": null,
+      "resolved_entities": [],
+      "plan": {},
+      "execution_metadata": {
+        "step_count": 1,
+        "result_row_count": 1
+      }
+    }
+  ]
+}
+```
+
+If at least one item returns `status: "error"`, the batch response status is `completed_with_errors`.
+
 ## POST /api/resolve-entities
 
 Extracts and resolves NBA player and team mentions from a message. This endpoint stops after entity resolution and returns the resolved entity dictionaries without planning or executing a stats query.

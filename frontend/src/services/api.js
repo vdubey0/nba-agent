@@ -24,6 +24,20 @@ export const sendMessage = async (conversationId, message, includeSteps = false)
   }
 };
 
+export const sendBatchQuestions = async (questions, includeSteps = false, maxConcurrency = 10) => {
+  try {
+    const response = await api.post('/api/query/batch', {
+      questions,
+      include_steps: includeSteps,
+      max_concurrency: maxConcurrency,
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error sending batch questions:', error);
+    throw error;
+  }
+};
+
 export const getConversation = async (conversationId) => {
   try {
     const response = await api.get(`/api/conversations/${conversationId}`);

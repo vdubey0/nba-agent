@@ -7,12 +7,12 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from app.analytics.routes import router as analytics_router
 from app.analytics.worker import run_analytics_worker_loop
-from app.chat_service import run_tracked_chat_message
+from app.chat_service import run_tracked_chat_message, run_tracked_query
 from app.config import (
     ANALYTICS_BACKGROUND_WORKER_ENABLED,
     APP_ENV,
@@ -31,6 +31,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger(__name__)
+BATCH_QUERY_MAX_CONCURRENCY = 10
 
 
 @asynccontextmanager
@@ -128,6 +129,13 @@ class QueryRequest(BaseModel):
     benchmark_case_id: Optional[str] = None
 
 
+class BatchQueryRequest(BaseModel):
+    questions: list[str] = Field(..., min_length=1)
+    include_steps: bool = False
+    source: Optional[str] = None
+    max_concurrency: int = Field(default=BATCH_QUERY_MAX_CONCURRENCY, ge=1, le=BATCH_QUERY_MAX_CONCURRENCY)
+
+
 class ResolveEntitiesRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = None
@@ -149,6 +157,20 @@ class QueryResponse(BaseModel):
     resolved_entities: Optional[list[dict[str, Any]]] = None
     plan: Optional[dict[str, Any]] = None
     execution_metadata: Optional[dict[str, Any]] = None
+
+
+class BatchQueryResult(QueryResponse):
+    index: int
+    question: str
+
+
+class BatchQueryResponse(BaseModel):
+    status: str
+    total: int
+    succeeded: int
+    failed: int
+    max_concurrency: int
+    results: list[BatchQueryResult]
 
 
 @app.get("/health")
@@ -204,10 +226,9 @@ async def chat(request: ChatRequest):
 async def query(request: QueryRequest):
     logger.info("Received /api/query request for question: %s", request.message)
     try:
-        result = run_tracked_chat_message(
+        result = run_tracked_query(
             client=client,
             message=request.message,
-            conversation_id=None,
             include_steps=request.include_steps,
             source=request.source or "api_query",
             http_status=200,
@@ -218,6 +239,51 @@ async def query(request: QueryRequest):
     except Exception as exc:
         logger.exception("Unexpected top-level failure in /api/query")
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/query/batch", response_model=BatchQueryResponse)
+async def query_batch(request: BatchQueryRequest):
+    logger.info("Received /api/query/batch request with %s questions", len(request.questions))
+    semaphore = asyncio.Semaphore(request.max_concurrency)
+
+    async def run_one(index: int, question: str) -> BatchQueryResult:
+        async with semaphore:
+            try:
+                result = await asyncio.to_thread(
+                    run_tracked_query,
+                    client=client,
+                    message=question,
+                    include_steps=request.include_steps,
+                    source=request.source or "api_query_batch",
+                    http_status=200,
+                )
+                return BatchQueryResult(index=index, question=question, **result)
+            except Exception as exc:
+                logger.exception("Unexpected failure in /api/query/batch item %s", index)
+                return BatchQueryResult(
+                    index=index,
+                    question=question,
+                    status="error",
+                    error={
+                        "message": "An unexpected error occurred",
+                        "details": str(exc),
+                    },
+                )
+
+    results = await asyncio.gather(
+        *(run_one(index, question) for index, question in enumerate(request.questions))
+    )
+    failed = sum(1 for result in results if result.status == "error")
+    succeeded = sum(1 for result in results if result.status == "success")
+
+    return BatchQueryResponse(
+        status="completed_with_errors" if failed else "success",
+        total=len(results),
+        succeeded=succeeded,
+        failed=failed,
+        max_concurrency=request.max_concurrency,
+        results=results,
+    )
 
 
 @app.post("/api/resolve-entities", response_model=ResolveEntitiesResponse)
