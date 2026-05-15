@@ -1,5 +1,5 @@
 from app.db import SessionLocal
-from app.models import Player, Team
+from app.models import Game, Player, PlayerGameStats, Team
 from sqlalchemy import func, or_, case
 import pprint
 import unicodedata
@@ -65,6 +65,34 @@ def find_player_candidates(session, name: str, limit: int = 5):
     return query.limit(limit).all()
 
 
+def latest_team_for_player(session, player_id: int):
+    row = (
+        session.query(
+            PlayerGameStats.team_id,
+            Team.city,
+            Team.full_name,
+            Team.abbreviation,
+            Game.game_date,
+        )
+        .join(Game, PlayerGameStats.game_id == Game.game_id)
+        .join(Team, PlayerGameStats.team_id == Team.team_id)
+        .filter(PlayerGameStats.player_id == player_id)
+        .filter(PlayerGameStats.minutes > 0)
+        .order_by(Game.game_date.desc())
+        .first()
+    )
+
+    if not row:
+        return None
+
+    return {
+        "team_id": row.team_id,
+        "team": f"{row.city} {row.full_name}",
+        "abbreviation": row.abbreviation,
+        "as_of_game_date": row.game_date.isoformat() if row.game_date else None,
+    }
+
+
 def resolve_player(session, name: str):
     cleaned = " ".join(name.strip().split())
     terms = cleaned.split()
@@ -83,7 +111,8 @@ def resolve_player(session, name: str):
             "full_name": player.full_name,
             "first_name": player.first_name,
             "last_name": player.last_name,
-            "id": player.player_id
+            "id": player.player_id,
+            "latest_team": latest_team_for_player(session, player.player_id),
         }
 
     # If multiple candidates, return ambiguous regardless of number of terms
